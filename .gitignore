@@ -24,9 +24,16 @@ profile.cov
 go.work
 go.work.sum
 
+/.gocache
+
 # env file
 .env
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+/AGENTS.md
+/CLAUDE.md
+/.claude
+/rocketbot
