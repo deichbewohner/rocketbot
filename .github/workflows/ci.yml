@@ -38,6 +38,7 @@ jobs:
         if: github.event_name == 'push'
         continue-on-error: true
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage.out
 
   build:
