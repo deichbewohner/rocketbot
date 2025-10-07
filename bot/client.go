@@ -241,68 +241,102 @@ func (c *Client) handleChangedMessage(msg *ddpMessage) {
 func (c *Client) handleRoomMessage(msg *ddpMessage) {
 	args, ok := msg.Fields["args"].([]interface{})
 	if !ok || len(args) == 0 {
+		c.logger.Debug("handleRoomMessage: no args")
 		return
 	}
 
 	msgData, ok := args[0].(map[string]interface{})
 	if !ok {
+		c.logger.Debug("handleRoomMessage: args[0] not map")
 		return
 	}
+
+	roomID, _ := msgData["rid"].(string)
 
 	// Ignore our own messages
 	if u, ok := msgData["u"].(map[string]interface{}); ok {
 		if userID, ok := u["_id"].(string); ok && userID == c.api.userID {
+			c.logger.Debug("ignoring own message")
 			return
 		}
 	}
 
 	// Ignore message edits (messages with editedAt field)
 	if _, hasEditedAt := msgData["editedAt"]; hasEditedAt {
+		c.logger.Debug("ignoring edited message")
 		return
 	}
 
 	// Ignore thread metadata updates (messages with tcount/tlm but no actual new content)
 	// When someone replies to a thread, the parent message gets updated with tcount/tlm
 	if _, hasTcount := msgData["tcount"]; hasTcount {
+		c.logger.Debug("ignoring thread metadata update (tcount)")
 		return
 	}
 	if _, hasTlm := msgData["tlm"]; hasTlm {
+		c.logger.Debug("ignoring thread metadata update (tlm)")
 		return
 	}
 
 	// Check if this is a DM by looking up the room ID
-	roomID, _ := msgData["rid"].(string)
 	if c.dmRooms[roomID] {
 		// Extract message metadata
 		message := parseMessage(msgData)
 
 		// Handle response generation in a goroutine to avoid blocking
 		go c.handleDMResponse(message)
+	} else {
+		c.logger.Debug("ignoring non-DM message", "room_id", roomID)
 	}
 }
 
 // handleUserNotification processes user notifications (like subscription changes)
 func (c *Client) handleUserNotification(msg *ddpMessage) {
 	args, ok := msg.Fields["args"].([]interface{})
-	if !ok || len(args) < 2 {
+	if !ok {
+		c.logger.Debug("handleUserNotification: args not array")
+		return
+	}
+	if len(args) < 2 {
+		c.logger.Debug("handleUserNotification: insufficient args", "len", len(args))
 		return
 	}
 
 	event, _ := args[0].(string)
-	if !strings.HasSuffix(event, "subscriptions-changed") {
+	c.logger.Debug("handleUserNotification: event received", "event", event)
+
+	// Check for subscription change events (inserted = new subscription, updated = modified)
+	if event != "inserted" && event != "updated" {
+		c.logger.Debug("handleUserNotification: not a subscription event, ignoring", "event", event)
 		return
 	}
 
 	payload, ok := args[1].(map[string]interface{})
 	if !ok {
+		c.logger.Debug("handleUserNotification: payload not map")
 		return
 	}
 
 	rid, _ := payload["rid"].(string)
+	roomType, _ := payload["t"].(string)
+
+	// Log new subscriptions for troubleshooting
+	if event == "inserted" {
+		c.logger.Debug("new subscription created", "room_id", rid, "type", roomType)
+	}
+
 	if rid != "" && !c.rooms[rid] {
 		c.rooms[rid] = true
+
+		// Track DM rooms (type "d")
+		if roomType == "d" {
+			c.dmRooms[rid] = true
+			c.logger.Info("subscribed to new DM room", "room_id", rid)
+		} else {
+			c.logger.Info("subscribed to new room", "room_id", rid, "type", roomType)
+		}
+
 		c.subscribe("stream-room-messages", rid, false)
-		c.logger.Info("subscribed to new room", "room_id", rid)
 	}
 }
 

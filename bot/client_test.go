@@ -347,12 +347,15 @@ func (m *mockResponseGenerator) GenerateResponse(ctx context.Context, message Me
 }
 
 func TestClient_HandleRoomMessage_IgnoreOwnMessages(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
 	// Create a client
 	client := &Client{
 		api: &APIClient{
 			userID: "bot-user-123",
 		},
 		dmRooms: map[string]bool{"dm-room-456": true},
+		logger:  logger,
 	}
 
 	// Message from the bot itself
@@ -380,12 +383,15 @@ func TestClient_HandleRoomMessage_IgnoreOwnMessages(t *testing.T) {
 }
 
 func TestClient_HandleRoomMessage_IgnoreEdits(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
 	client := &Client{
 		api: &APIClient{
 			userID: "bot-user-123",
 		},
 		dmRooms:   map[string]bool{"dm-room-456": true},
 		generator: &mockResponseGenerator{response: "test"},
+		logger:    logger,
 	}
 
 	// Message with editedAt field
@@ -415,12 +421,15 @@ func TestClient_HandleRoomMessage_IgnoreEdits(t *testing.T) {
 }
 
 func TestClient_HandleRoomMessage_IgnoreThreadMetadataUpdates(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
 	client := &Client{
 		api: &APIClient{
 			userID: "bot-user-123",
 		},
 		dmRooms:   map[string]bool{"dm-room-456": true},
 		generator: &mockResponseGenerator{response: "test"},
+		logger:    logger,
 	}
 
 	// Message with tcount field (thread metadata update)
