@@ -2,6 +2,19 @@
 
 **Experimental Rocket.Chat bot with streaming message support. Unmaintained.**
 
+[![CI](https://github.com/deichbewohner/rocketbot/actions/workflows/ci.yml/badge.svg?branch=release)](https://github.com/deichbewohner/rocketbot/actions/workflows/ci.yml)
+[![Release Workflow](https://github.com/deichbewohner/rocketbot/actions/workflows/release.yml/badge.svg)](https://github.com/deichbewohner/rocketbot/actions/workflows/release.yml)
+
+[![CodeQL](https://github.com/deichbewohner/rocketbot/actions/workflows/github-code-scanning/codeql/badge.svg?branch=release)](https://github.com/deichbewohner/rocketbot/actions/workflows/github-code-scanning/codeql)
+[![Coverage](https://codecov.io/gh/deichbewohner/rocketbot/branch/release/graph/badge.svg)](https://codecov.io/gh/deichbewohner/rocketbot)
+[![Go Report Card](https://goreportcard.com/badge/github.com/deichbewohner/rocketbot)](https://goreportcard.com/report/github.com/deichbewohner/rocketbot)
+
+[![Latest Release](https://img.shields.io/github/v/release/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/releases)
+[![GHCR](https://img.shields.io/badge/ghcr.io-deichbewohner%2Frocketbot-informational)](https://ghcr.io/deichbewohner/rocketbot)
+
+[![Go Version](https://img.shields.io/github/go-mod/go-version/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/blob/release/go.mod)
+[![License](https://img.shields.io/github/license/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/blob/release/LICENSE)
+
 ## Security
 
 - Not internet-facing. Do not expose the HTTP API publicly.

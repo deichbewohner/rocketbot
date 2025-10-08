@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -60,6 +61,28 @@ type sendResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// validateTarget validates that exactly one target field is set
+func validateTarget(t Target) error {
+	set := 0
+	if t.Username != "" {
+		set++
+	}
+	if t.Channel != "" {
+		set++
+	}
+	if t.RoomID != "" {
+		set++
+	}
+
+	if set == 0 {
+		return fmt.Errorf("target must specify username, channel, or roomId")
+	}
+	if set > 1 {
+		return fmt.Errorf("target must specify only one of username, channel, or roomId")
+	}
+	return nil
+}
+
 // handleSend handles POST /api/v1/bots/{botName}/send
 func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -107,22 +130,8 @@ func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate target - exactly one field must be set
-	targetCount := 0
-	if req.Target.Username != "" {
-		targetCount++
-	}
-	if req.Target.Channel != "" {
-		targetCount++
-	}
-	if req.Target.RoomID != "" {
-		targetCount++
-	}
-	if targetCount == 0 {
-		s.writeError(w, http.StatusBadRequest, "target must specify username, channel, or roomId")
-		return
-	}
-	if targetCount > 1 {
-		s.writeError(w, http.StatusBadRequest, "target must specify only one of username, channel, or roomId")
+	if err := validateTarget(req.Target); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 

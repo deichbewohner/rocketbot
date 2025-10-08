@@ -5,296 +5,251 @@ import (
 	"testing"
 )
 
-func TestLoad(t *testing.T) {
+func TestLoad_SingleBot(t *testing.T) {
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Count() != 1 {
+		t.Errorf("Count() = %d, want 1", cfg.Count())
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.URL != "https://chat.example.com" {
+		t.Errorf("URL = %q, want %q", bot.URL, "https://chat.example.com")
+	}
+	if bot.ParserType != "n8n" {
+		t.Errorf("ParserType = %q, want %q", bot.ParserType, "n8n")
+	}
+	if !bot.StreamedOutput {
+		t.Error("StreamedOutput = false, want true (default)")
+	}
+}
+
+func TestLoad_MultipleBots(t *testing.T) {
+	t.Setenv("BOT1_URL", "https://chat1.example.com")
+	t.Setenv("BOT1_USER_ID", "user1")
+	t.Setenv("BOT1_TOKEN", "token1")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT2_URL", "https://chat2.example.com")
+	t.Setenv("BOT2_USER_ID", "user2")
+	t.Setenv("BOT2_TOKEN", "token2")
+	t.Setenv("BOT2_PARSER_TYPE", "n8n")
+	t.Setenv("BOT3_URL", "https://chat3.example.com")
+	t.Setenv("BOT3_USER_ID", "user3")
+	t.Setenv("BOT3_TOKEN", "token3")
+	t.Setenv("BOT3_PARSER_TYPE", "n8n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Count() != 3 {
+		t.Errorf("Count() = %d, want 3", cfg.Count())
+	}
+
+	bot2, _ := cfg.Get(1)
+	if bot2.UserID != "user2" {
+		t.Errorf("Bot 2 UserID = %q, want %q", bot2.UserID, "user2")
+	}
+}
+
+func TestLoad_BooleanFlags(t *testing.T) {
+	tests := []struct {
+		name              string
+		streamedOutput    string // empty = not set
+		threadDefault     string // empty = not set
+		wantStreamedOut   bool
+		wantThreadDefault bool
+	}{
+		{
+			name:              "defaults",
+			streamedOutput:    "",
+			threadDefault:     "",
+			wantStreamedOut:   true,
+			wantThreadDefault: false,
+		},
+		{
+			name:              "streamed_output_false",
+			streamedOutput:    "false",
+			threadDefault:     "",
+			wantStreamedOut:   false,
+			wantThreadDefault: false,
+		},
+		{
+			name:              "streamed_output_zero",
+			streamedOutput:    "0",
+			threadDefault:     "",
+			wantStreamedOut:   false,
+			wantThreadDefault: false,
+		},
+		{
+			name:              "thread_default_true",
+			streamedOutput:    "",
+			threadDefault:     "true",
+			wantStreamedOut:   true,
+			wantThreadDefault: true,
+		},
+		{
+			name:              "thread_default_one",
+			streamedOutput:    "",
+			threadDefault:     "1",
+			wantStreamedOut:   true,
+			wantThreadDefault: true,
+		},
+		{
+			name:              "both_custom",
+			streamedOutput:    "false",
+			threadDefault:     "true",
+			wantStreamedOut:   false,
+			wantThreadDefault: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BOT1_URL", "https://chat.example.com")
+			t.Setenv("BOT1_USER_ID", "user123")
+			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_PARSER_TYPE", "n8n")
+			if tt.streamedOutput != "" {
+				t.Setenv("BOT1_STREAMED_OUTPUT", tt.streamedOutput)
+			}
+			if tt.threadDefault != "" {
+				t.Setenv("BOT1_THREAD_DEFAULT", tt.threadDefault)
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			bot, _ := cfg.Get(0)
+			if bot.StreamedOutput != tt.wantStreamedOut {
+				t.Errorf("StreamedOutput = %v, want %v", bot.StreamedOutput, tt.wantStreamedOut)
+			}
+			if bot.ThreadDefault != tt.wantThreadDefault {
+				t.Errorf("ThreadDefault = %v, want %v", bot.ThreadDefault, tt.wantThreadDefault)
+			}
+		})
+	}
+}
+
+func TestLoad_URLProcessing(t *testing.T) {
+	t.Setenv("BOT1_URL", "https://chat.example.com/")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.URL != "https://chat.example.com" {
+		t.Errorf("URL = %q, want %q (trailing slash should be removed)", bot.URL, "https://chat.example.com")
+	}
+}
+
+func TestLoad_CustomParserType(t *testing.T) {
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_PARSER_TYPE", "openai")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.ParserType != "openai" {
+		t.Errorf("ParserType = %q, want %q", bot.ParserType, "openai")
+	}
+}
+
+func TestLoad_WebhookConfig(t *testing.T) {
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_WEBHOOK_AUTH", "Bearer secret123")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.WebhookURL != "https://webhook.example.com/api" {
+		t.Errorf("WebhookURL = %q, want %q", bot.WebhookURL, "https://webhook.example.com/api")
+	}
+	if bot.WebhookAuth != "Bearer secret123" {
+		t.Errorf("WebhookAuth = %q, want %q", bot.WebhookAuth, "Bearer secret123")
+	}
+}
+
+func TestLoad_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name        string
 		envVars     map[string]string
-		wantBots    int
-		wantErr     bool
 		errContains string
-		validate    func(*testing.T, *Config)
 	}{
 		{
-			name: "single_bot_with_defaults",
+			name: "missing_user_id",
 			envVars: map[string]string{
 				"BOT1_URL":         "https://chat.example.com",
-				"BOT1_USER_ID":     "user123",
 				"BOT1_TOKEN":       "token456",
 				"BOT1_PARSER_TYPE": "n8n",
 			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.URL != "https://chat.example.com" {
-					t.Errorf("URL = %q, want %q", bot.URL, "https://chat.example.com")
-				}
-				if bot.ParserType != "n8n" {
-					t.Errorf("ParserType = %q, want %q", bot.ParserType, "n8n")
-				}
-				if !bot.StreamedOutput {
-					t.Error("StreamedOutput = false, want true")
-				}
-			},
-		},
-		{
-			name: "multiple_bots",
-			envVars: map[string]string{
-				"BOT1_URL":         "https://chat1.example.com",
-				"BOT1_USER_ID":     "user1",
-				"BOT1_TOKEN":       "token1",
-				"BOT1_PARSER_TYPE": "n8n",
-				"BOT2_URL":         "https://chat2.example.com",
-				"BOT2_USER_ID":     "user2",
-				"BOT2_TOKEN":       "token2",
-				"BOT2_PARSER_TYPE": "n8n",
-				"BOT3_URL":         "https://chat3.example.com",
-				"BOT3_USER_ID":     "user3",
-				"BOT3_TOKEN":       "token3",
-				"BOT3_PARSER_TYPE": "n8n",
-			},
-			wantBots: 3,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				if cfg.Count() != 3 {
-					t.Errorf("Count() = %d, want 3", cfg.Count())
-				}
-				bot2, _ := cfg.Get(1)
-				if bot2.UserID != "user2" {
-					t.Errorf("Bot 2 UserID = %q, want %q", bot2.UserID, "user2")
-				}
-			},
-		},
-		{
-			name: "url_trailing_slash_removed",
-			envVars: map[string]string{
-				"BOT1_URL":         "https://chat.example.com/",
-				"BOT1_USER_ID":     "user123",
-				"BOT1_TOKEN":       "token456",
-				"BOT1_PARSER_TYPE": "n8n",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.URL != "https://chat.example.com" {
-					t.Errorf("URL = %q, want %q (trailing slash should be removed)", bot.URL, "https://chat.example.com")
-				}
-			},
-		},
-		{
-			name: "streamed_output_disabled",
-			envVars: map[string]string{
-				"BOT1_URL":             "https://chat.example.com",
-				"BOT1_USER_ID":         "user123",
-				"BOT1_TOKEN":           "token456",
-				"BOT1_PARSER_TYPE":     "n8n",
-				"BOT1_STREAMED_OUTPUT": "false",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.StreamedOutput {
-					t.Error("StreamedOutput = true, want false")
-				}
-			},
-		},
-		{
-			name: "streamed_output_zero",
-			envVars: map[string]string{
-				"BOT1_URL":             "https://chat.example.com",
-				"BOT1_USER_ID":         "user123",
-				"BOT1_TOKEN":           "token456",
-				"BOT1_PARSER_TYPE":     "n8n",
-				"BOT1_STREAMED_OUTPUT": "0",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.StreamedOutput {
-					t.Error("StreamedOutput = true, want false")
-				}
-			},
-		},
-		{
-			name: "custom_parser_type",
-			envVars: map[string]string{
-				"BOT1_URL":         "https://chat.example.com",
-				"BOT1_USER_ID":     "user123",
-				"BOT1_TOKEN":       "token456",
-				"BOT1_PARSER_TYPE": "openai",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.ParserType != "openai" {
-					t.Errorf("ParserType = %q, want %q", bot.ParserType, "openai")
-				}
-			},
-		},
-		{
-			name: "webhook_url_and_auth",
-			envVars: map[string]string{
-				"BOT1_URL":          "https://chat.example.com",
-				"BOT1_USER_ID":      "user123",
-				"BOT1_TOKEN":        "token456",
-				"BOT1_PARSER_TYPE":  "n8n",
-				"BOT1_WEBHOOK_URL":  "https://webhook.example.com/api",
-				"BOT1_WEBHOOK_AUTH": "Bearer secret123",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.WebhookURL != "https://webhook.example.com/api" {
-					t.Errorf("WebhookURL = %q, want %q", bot.WebhookURL, "https://webhook.example.com/api")
-				}
-				if bot.WebhookAuth != "Bearer secret123" {
-					t.Errorf("WebhookAuth = %q, want %q", bot.WebhookAuth, "Bearer secret123")
-				}
-			},
-		},
-		{
-			name: "thread_default_enabled",
-			envVars: map[string]string{
-				"BOT1_URL":            "https://chat.example.com",
-				"BOT1_USER_ID":        "user123",
-				"BOT1_TOKEN":          "token456",
-				"BOT1_PARSER_TYPE":    "n8n",
-				"BOT1_THREAD_DEFAULT": "true",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if !bot.ThreadDefault {
-					t.Error("ThreadDefault = false, want true")
-				}
-			},
-		},
-		{
-			name: "thread_default_enabled_with_one",
-			envVars: map[string]string{
-				"BOT1_URL":            "https://chat.example.com",
-				"BOT1_USER_ID":        "user123",
-				"BOT1_TOKEN":          "token456",
-				"BOT1_PARSER_TYPE":    "n8n",
-				"BOT1_THREAD_DEFAULT": "1",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if !bot.ThreadDefault {
-					t.Error("ThreadDefault = false, want true")
-				}
-			},
-		},
-		{
-			name: "thread_default_disabled",
-			envVars: map[string]string{
-				"BOT1_URL":            "https://chat.example.com",
-				"BOT1_USER_ID":        "user123",
-				"BOT1_TOKEN":          "token456",
-				"BOT1_PARSER_TYPE":    "n8n",
-				"BOT1_THREAD_DEFAULT": "false",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.ThreadDefault {
-					t.Error("ThreadDefault = true, want false")
-				}
-			},
-		},
-		{
-			name: "thread_default_not_set",
-			envVars: map[string]string{
-				"BOT1_URL":         "https://chat.example.com",
-				"BOT1_USER_ID":     "user123",
-				"BOT1_TOKEN":       "token456",
-				"BOT1_PARSER_TYPE": "n8n",
-			},
-			wantBots: 1,
-			wantErr:  false,
-			validate: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				bot, _ := cfg.Get(0)
-				if bot.ThreadDefault {
-					t.Error("ThreadDefault = true, want false (default)")
-				}
-			},
-		},
-		{
-			name:        "missing_user_id",
-			envVars:     map[string]string{"BOT1_URL": "https://chat.example.com", "BOT1_TOKEN": "token456", "BOT1_PARSER_TYPE": "n8n"},
-			wantErr:     true,
 			errContains: "BOT1_USER_ID is required",
 		},
 		{
-			name:        "missing_token",
-			envVars:     map[string]string{"BOT1_URL": "https://chat.example.com", "BOT1_USER_ID": "user123", "BOT1_PARSER_TYPE": "n8n"},
-			wantErr:     true,
+			name: "missing_token",
+			envVars: map[string]string{
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
 			errContains: "BOT1_TOKEN is required",
 		},
 		{
-			name:        "missing_parser_type",
-			envVars:     map[string]string{"BOT1_URL": "https://chat.example.com", "BOT1_USER_ID": "user123", "BOT1_TOKEN": "token456"},
-			wantErr:     true,
+			name: "missing_parser_type",
+			envVars: map[string]string{
+				"BOT1_URL":     "https://chat.example.com",
+				"BOT1_USER_ID": "user123",
+				"BOT1_TOKEN":   "token456",
+			},
 			errContains: "BOT1_PARSER_TYPE is required",
 		},
 		{
 			name:        "no_bots_configured",
 			envVars:     map[string]string{},
-			wantErr:     true,
 			errContains: "no bots configured",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Clear environment and set test vars
 			for k, v := range tt.envVars {
 				t.Setenv(k, v)
 			}
 
-			cfg, err := Load()
-
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			_, err := Load()
+			if err == nil {
+				t.Fatal("Load() error = nil, want error")
 			}
-
-			if tt.wantErr {
-				if err == nil || !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("Load() error = %v, want error containing %q", err, tt.errContains)
-				}
-				return
-			}
-
-			if cfg == nil {
-				t.Fatal("Load() returned nil config")
-			}
-
-			if cfg.Count() != tt.wantBots {
-				t.Errorf("Count() = %d, want %d", cfg.Count(), tt.wantBots)
-			}
-
-			if tt.validate != nil {
-				tt.validate(t, cfg)
+			if !strings.Contains(err.Error(), tt.errContains) {
+				t.Errorf("Load() error = %v, want error containing %q", err, tt.errContains)
 			}
 		})
 	}

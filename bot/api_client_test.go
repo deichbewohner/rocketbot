@@ -164,11 +164,11 @@ func TestAPIClient_SetStatusOnline(t *testing.T) {
 
 func TestAPIClient_GetSubscriptions(t *testing.T) {
 	tests := []struct {
-		name        string
+		name         string
 		roundTripper testutil.RoundTripperFunc
-		wantRooms   int
-		wantDMs     int
-		wantErr     bool
+		wantRooms    int
+		wantDMs      int
+		wantErr      bool
 	}{
 		{
 			name: "success_with_dms",

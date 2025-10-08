@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -51,6 +52,63 @@ func (h *otelHandlerWrapper) WithGroup(name string) slog.Handler {
 	return &otelHandlerWrapper{Handler: h.Handler.WithGroup(name)}
 }
 
+// getLogLevel returns the configured log level from environment
+func getLogLevel() slog.Level {
+	if os.Getenv("LOG_LEVEL") == "DEBUG" {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
+
+// createBot creates and configures a bot client from config
+func createBot(botCfg config.BotConfig, botName string, httpClient *http.Client, logger *slog.Logger) (*bot.Client, error) {
+	botLogger := logger.With("bot", botName)
+
+	// Validate webhook URL
+	if botCfg.WebhookURL == "" {
+		return nil, fmt.Errorf("missing webhook url for bot %s", botName)
+	}
+
+	// Create stream parser based on configuration
+	var parser bot.StreamParser
+	switch botCfg.ParserType {
+	case "n8n":
+		parser = bot.NewN8nParser(botLogger)
+	default:
+		return nil, fmt.Errorf("unknown parser type %q for bot %s", botCfg.ParserType, botName)
+	}
+
+	// Create webhook generator with injected parser
+	generator := bot.NewWebhookGenerator(
+		botCfg.WebhookURL,
+		botCfg.WebhookAuth,
+		parser,
+		httpClient,
+		botLogger,
+	)
+
+	botLogger.Info(
+		"using webhook generator",
+		"parser_type",
+		botCfg.ParserType,
+		"streamed_output",
+		botCfg.StreamedOutput,
+	)
+
+	client := bot.NewClient(
+		botCfg.URL,
+		botCfg.UserID,
+		botCfg.Token,
+		botName,
+		generator,
+		botCfg.StreamedOutput,
+		botCfg.ThreadDefault,
+		botLogger,
+	)
+
+	return client, nil
+}
+
 func main() {
 	ctx := context.Background()
 
@@ -94,12 +152,8 @@ func main() {
 	}()
 
 	// Create logger with custom wrapper that adds trace IDs to JSON logs
-	logLevel := slog.LevelInfo
-	if os.Getenv("LOG_LEVEL") == "DEBUG" {
-		logLevel = slog.LevelDebug
-	}
 	baseHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: logLevel,
+		Level: getLogLevel(),
 	})
 	logger := slog.New(&otelHandlerWrapper{Handler: baseHandler})
 
@@ -126,61 +180,21 @@ func main() {
 		botCfg, _ := cfg.Get(i)
 		botName := cfg.BotName(i)
 
-		// Create child logger with bot context
-		botLogger := logger.With("bot", botName)
-
-		// Create response generator based on configuration
-		var generator bot.ResponseGenerator
-		if botCfg.WebhookURL == "" {
-			logger.Error("missing webhook url", "error", err)
+		client, err := createBot(botCfg, botName, httpClient, logger)
+		if err != nil {
+			logger.Error("failed to create bot", "bot", botName, "error", err)
 			os.Exit(1)
 		}
-		// Create stream parser based on configuration
-		var parser bot.StreamParser
-		switch botCfg.ParserType {
-		case "n8n":
-			parser = bot.NewN8nParser(botLogger)
-		default:
-			logger.Error("unknown parser type", "parser_type", botCfg.ParserType, "bot", botName)
-			os.Exit(1)
-		}
-
-		// Use webhook generator with injected parser
-		generator = bot.NewWebhookGenerator(
-			botCfg.WebhookURL,
-			botCfg.WebhookAuth,
-			parser,
-			httpClient,
-			botLogger,
-		)
-		botLogger.Info(
-			"using webhook generator",
-			"parser_type",
-			botCfg.ParserType,
-			"streamed_output",
-			botCfg.StreamedOutput,
-		)
-
-		client := bot.NewClient(
-			botCfg.URL,
-			botCfg.UserID,
-			botCfg.Token,
-			botName,
-			generator,
-			botCfg.StreamedOutput,
-			botCfg.ThreadDefault,
-			botLogger,
-		)
 		clients = append(clients, client)
 
 		wg.Add(1)
-		go func(c *bot.Client, name string, log *slog.Logger) {
+		go func(c *bot.Client, name string) {
 			defer wg.Done()
 			if err := c.Start(); err != nil {
-				log.Error("failed to start bot", "error", err)
+				logger.Error("failed to start bot", "bot", name, "error", err)
 				os.Exit(1)
 			}
-		}(client, botName, botLogger)
+		}(client, botName)
 	}
 
 	logger.Info("all bots started successfully")

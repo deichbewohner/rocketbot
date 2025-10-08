@@ -13,6 +13,78 @@ import (
 	"github.com/deichbewohner/rocketbot/bot/testutil"
 )
 
+func TestValidateTarget(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  Target
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "valid_username",
+			target:  Target{Username: "alice"},
+			wantErr: false,
+		},
+		{
+			name:    "valid_channel",
+			target:  Target{Channel: "general"},
+			wantErr: false,
+		},
+		{
+			name:    "valid_roomId",
+			target:  Target{RoomID: "abc123"},
+			wantErr: false,
+		},
+		{
+			name:    "empty_target",
+			target:  Target{},
+			wantErr: true,
+			errMsg:  "must specify username, channel, or roomId",
+		},
+		{
+			name:    "username_and_channel",
+			target:  Target{Username: "alice", Channel: "general"},
+			wantErr: true,
+			errMsg:  "only one",
+		},
+		{
+			name:    "username_and_roomId",
+			target:  Target{Username: "alice", RoomID: "abc123"},
+			wantErr: true,
+			errMsg:  "only one",
+		},
+		{
+			name:    "channel_and_roomId",
+			target:  Target{Channel: "general", RoomID: "abc123"},
+			wantErr: true,
+			errMsg:  "only one",
+		},
+		{
+			name:    "all_three_fields",
+			target:  Target{Username: "alice", Channel: "general", RoomID: "abc123"},
+			wantErr: true,
+			errMsg:  "only one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateTarget(tt.target)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				} else if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("error = %q, want to contain %q", err.Error(), tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestHTTPServer_HandleSend_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name           string

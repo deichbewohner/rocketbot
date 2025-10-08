@@ -22,6 +22,16 @@ func NewN8nParser(logger *slog.Logger) *N8nParser {
 	}
 }
 
+// send attempts to send an event to the channel, respecting context cancellation
+func (p *N8nParser) send(ctx context.Context, ch chan<- StreamEvent, event StreamEvent) bool {
+	select {
+	case ch <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // Parse implements StreamParser for n8n streaming format
 // Expects newline-delimited JSON: {"type":"item","content":"text"}
 func (p *N8nParser) Parse(ctx context.Context, body io.Reader) (<-chan StreamEvent, error) {
@@ -76,24 +86,24 @@ func (p *N8nParser) Parse(ctx context.Context, body io.Reader) (<-chan StreamEve
 
 			case "item":
 				// Extract content and emit as chunk
-				if content, ok := data["content"].(string); ok && content != "" {
-					fullMessage.WriteString(content)
-					select {
-					case ch <- StreamEvent{Type: EventMessageChunk, Content: content}:
-					case <-ctx.Done():
-						return
-					}
+				content, ok := data["content"].(string)
+				if !ok || content == "" {
+					break
+				}
+				fullMessage.WriteString(content)
+				if !p.send(ctx, ch, StreamEvent{Type: EventMessageChunk, Content: content}) {
+					return
 				}
 
 			case "end":
 				// Emit full accumulated message
 				final := fullMessage.String()
-				if final != "" {
-					select {
-					case ch <- StreamEvent{Type: EventMessage, Content: final}:
-					case <-ctx.Done():
-						return
-					}
+				if final == "" {
+					p.logger.Debug("stream end marker received", "total_length", 0)
+					break
+				}
+				if !p.send(ctx, ch, StreamEvent{Type: EventMessage, Content: final}) {
+					return
 				}
 				p.logger.Debug("stream end marker received", "total_length", len(final))
 
