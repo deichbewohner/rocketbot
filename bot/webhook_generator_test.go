@@ -72,7 +72,7 @@ func TestWebhookGenerator_GenerateResponse(t *testing.T) {
 				testutil.NewTestLogger(t),
 			)
 
-			msg := testutil.NewMessage(t).WithText("Test message").Build()
+			msg := bot.NewMessage(t).WithText("Test message").Build()
 			history := []bot.Message{}
 
 			response, err := generator.GenerateResponse(context.Background(), msg, history)
@@ -139,7 +139,7 @@ func TestWebhookGenerator_GenerateResponseStream(t *testing.T) {
 				testutil.NewTestLogger(t),
 			)
 
-			msg := testutil.NewMessage(t).WithText("Test message").Build()
+			msg := bot.NewMessage(t).WithText("Test message").Build()
 			history := []bot.Message{}
 
 			chunkCh, err := generator.GenerateResponseStream(context.Background(), msg, history)
@@ -191,7 +191,7 @@ func TestWebhookGenerator_AuthHeaderPropagation(t *testing.T) {
 		testutil.NewTestLogger(t),
 	)
 
-	msg := testutil.NewMessage(t).Build()
+	msg := bot.NewMessage(t).Build()
 	_, err := generator.GenerateResponse(context.Background(), msg, []bot.Message{})
 	if err != nil {
 		t.Fatalf("GenerateResponse() error = %v", err)
@@ -229,7 +229,7 @@ func TestWebhookGenerator_ContextMetadata(t *testing.T) {
 	ctx = context.WithValue(ctx, bot.ReplyMessageIDKey, "reply-msg-123")
 	ctx = context.WithValue(ctx, bot.ReplyRoomIDKey, "reply-room-456")
 
-	msg := testutil.NewMessage(t).Build()
+	msg := bot.NewMessage(t).Build()
 	_, err := generator.GenerateResponse(ctx, msg, []bot.Message{})
 	if err != nil {
 		t.Fatalf("GenerateResponse() error = %v", err)
@@ -270,7 +270,7 @@ func TestWebhookGenerator_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	msg := testutil.NewMessage(t).Build()
+	msg := bot.NewMessage(t).Build()
 	chunkCh, err := generator.GenerateResponseStream(ctx, msg, []bot.Message{})
 	if err != nil {
 		t.Fatalf("GenerateResponseStream() error = %v", err)

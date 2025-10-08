@@ -1,0 +1,23 @@
+# Codecov Configuration
+# https://docs.codecov.com/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+
+# Ignore test infrastructure and helpers from coverage
+ignore:
+  - "**/testutil/**/*"        # Exclude testutil packages at any depth
+  - "**/testfixtures.go"      # Exclude test fixture builders
+  - "**/testdata/**/*"        # Exclude test data directories
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false

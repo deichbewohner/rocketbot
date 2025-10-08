@@ -1,13 +1,18 @@
 package bot
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
+	"net/http"
 	"sort"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/deichbewohner/rocketbot/bot/testutil"
 )
 
 func TestParseMessage_TimestampVariants(t *testing.T) {
@@ -347,7 +352,7 @@ func (m *mockResponseGenerator) GenerateResponse(ctx context.Context, message Me
 }
 
 func TestClient_HandleRoomMessage_IgnoreOwnMessages(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := testutil.NewTestLogger(t)
 
 	// Create a client
 	client := &Client{
@@ -383,7 +388,7 @@ func TestClient_HandleRoomMessage_IgnoreOwnMessages(t *testing.T) {
 }
 
 func TestClient_HandleRoomMessage_IgnoreEdits(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := testutil.NewTestLogger(t)
 
 	client := &Client{
 		api: &APIClient{
@@ -421,7 +426,7 @@ func TestClient_HandleRoomMessage_IgnoreEdits(t *testing.T) {
 }
 
 func TestClient_HandleRoomMessage_IgnoreThreadMetadataUpdates(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logger := testutil.NewTestLogger(t)
 
 	client := &Client{
 		api: &APIClient{
@@ -456,56 +461,732 @@ func TestClient_HandleRoomMessage_IgnoreThreadMetadataUpdates(t *testing.T) {
 	client.handleRoomMessage(msg)
 }
 
-func TestClient_ProcessMessage_Connected(t *testing.T) {
-	// Create a discard logger for testing
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+func TestClient_ProcessMessage(t *testing.T) {
+	tests := []struct {
+		name         string
+		msg          *ddpMessage
+		initialRooms []string
+		setupClient  func(*Client)
+		validate     func(*testing.T, *Client, []interface{})
+	}{
+		{
+			name: "connected_sends_login",
+			msg: &ddpMessage{
+				Msg: "connected",
+			},
+			initialRooms: []string{},
+			setupClient:  func(c *Client) {},
+			validate: func(t *testing.T, c *Client, writes []interface{}) {
+				t.Helper()
+				if len(writes) == 0 {
+					t.Fatal("expected login message")
+				}
+				loginMsg, ok := writes[0].(ddpMessage)
+				if !ok || loginMsg.Method != "login" {
+					t.Errorf("expected login message, got %+v", writes[0])
+				}
+			},
+		},
+		{
+			name: "result_login_subscribes_to_rooms",
+			msg: &ddpMessage{
+				Msg: "result",
+				ID:  "login-id",
+			},
+			initialRooms: []string{"room1", "room2"},
+			setupClient: func(c *Client) {
+				c.pending["login-id"] = "login"
+			},
+			validate: func(t *testing.T, c *Client, writes []interface{}) {
+				t.Helper()
+				// Should have: UserPresence:online + 2 subscriptions + subscribe to notify-user
+				if len(writes) < 3 {
+					t.Errorf("expected at least 3 messages, got %d", len(writes))
+				}
+				// Check for UserPresence call
+				foundPresence := false
+				for _, w := range writes {
+					if msg, ok := w.(ddpMessage); ok && msg.Method == "UserPresence:online" {
+						foundPresence = true
+						break
+					}
+				}
+				if !foundPresence {
+					t.Error("expected UserPresence:online call")
+				}
+			},
+		},
+		{
+			name: "ping_sends_pong",
+			msg: &ddpMessage{
+				Msg: "ping",
+			},
+			initialRooms: []string{},
+			setupClient:  func(c *Client) {},
+			validate: func(t *testing.T, c *Client, writes []interface{}) {
+				t.Helper()
+				if len(writes) == 0 {
+					t.Fatal("expected pong message")
+				}
+				pongMsg, ok := writes[0].(ddpMessage)
+				if !ok || pongMsg.Msg != "pong" {
+					t.Errorf("expected pong message, got %+v", writes[0])
+				}
+			},
+		},
+		{
+			name: "changed_calls_handleChangedMessage",
+			msg: &ddpMessage{
+				Msg:        "changed",
+				Collection: "stream-room-messages",
+				Fields:     map[string]interface{}{},
+			},
+			initialRooms: []string{},
+			setupClient:  func(c *Client) {},
+			validate: func(t *testing.T, c *Client, writes []interface{}) {
+				t.Helper()
+				// No writes expected, just routing check
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := testutil.NewTestLogger(t)
+			client := &Client{
+				api: &APIClient{
+					token:  "test-token",
+					userID: "test-user",
+				},
+				pending: make(map[string]string),
+				rooms:   make(map[string]bool),
+				dmRooms: make(map[string]bool),
+				logger:  logger,
+			}
+
+			mockWs := testutil.NewMockWsConn()
+			client.wsMu.Lock()
+			client.ws = mockWs
+			client.wsMu.Unlock()
+
+			tt.setupClient(client)
+			client.processMessage(tt.msg, tt.initialRooms)
+			tt.validate(t, client, mockWs.GetWrites())
+		})
+	}
+}
+
+func TestClient_HandleChangedMessage(t *testing.T) {
+	tests := []struct {
+		name       string
+		msg        *ddpMessage
+		dmRooms    map[string]bool
+		expectCall bool
+	}{
+		{
+			name: "routes_user_notifications",
+			msg: &ddpMessage{
+				Collection: "stream-notify-user",
+				Fields: map[string]interface{}{
+					"args": []interface{}{"inserted", map[string]interface{}{}},
+				},
+			},
+			dmRooms:    map[string]bool{},
+			expectCall: false,
+		},
+		{
+			name: "ignores_unknown_collection",
+			msg: &ddpMessage{
+				Collection: "unknown-collection",
+				Fields:     map[string]interface{}{},
+			},
+			dmRooms:    map[string]bool{},
+			expectCall: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := testutil.NewTestLogger(t)
+			client := &Client{
+				api:     &APIClient{userID: "bot-user"},
+				dmRooms: tt.dmRooms,
+				logger:  logger,
+			}
+
+			// Just ensure it doesn't panic
+			client.handleChangedMessage(tt.msg)
+		})
+	}
+}
+
+func TestClient_HandleUserNotification(t *testing.T) {
+	tests := []struct {
+		name          string
+		msg           *ddpMessage
+		expectSubRoom string
+		expectDM      bool
+	}{
+		{
+			name: "inserted_dm_room",
+			msg: &ddpMessage{
+				Fields: map[string]interface{}{
+					"args": []interface{}{
+						"inserted",
+						map[string]interface{}{
+							"rid": "new-dm-room",
+							"t":   "d",
+						},
+					},
+				},
+			},
+			expectSubRoom: "new-dm-room",
+			expectDM:      true,
+		},
+		{
+			name: "updated_channel_room",
+			msg: &ddpMessage{
+				Fields: map[string]interface{}{
+					"args": []interface{}{
+						"updated",
+						map[string]interface{}{
+							"rid": "channel-room",
+							"t":   "c",
+						},
+					},
+				},
+			},
+			expectSubRoom: "channel-room",
+			expectDM:      false,
+		},
+		{
+			name: "removed_event_ignored",
+			msg: &ddpMessage{
+				Fields: map[string]interface{}{
+					"args": []interface{}{
+						"removed",
+						map[string]interface{}{
+							"rid": "old-room",
+						},
+					},
+				},
+			},
+			expectSubRoom: "",
+			expectDM:      false,
+		},
+		{
+			name: "missing_args",
+			msg: &ddpMessage{
+				Fields: map[string]interface{}{},
+			},
+			expectSubRoom: "",
+			expectDM:      false,
+		},
+		{
+			name: "insufficient_args",
+			msg: &ddpMessage{
+				Fields: map[string]interface{}{
+					"args": []interface{}{"inserted"},
+				},
+			},
+			expectSubRoom: "",
+			expectDM:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logger := testutil.NewTestLogger(t)
+			client := &Client{
+				api:     &APIClient{userID: "bot-user"},
+				rooms:   make(map[string]bool),
+				dmRooms: make(map[string]bool),
+				logger:  logger,
+			}
+
+			mockWs := testutil.NewMockWsConn()
+			client.wsMu.Lock()
+			client.ws = mockWs
+			client.wsMu.Unlock()
+
+			client.handleUserNotification(tt.msg)
+
+			if tt.expectSubRoom != "" {
+				if !client.rooms[tt.expectSubRoom] {
+					t.Errorf("expected room %q to be tracked", tt.expectSubRoom)
+				}
+				if tt.expectDM && !client.dmRooms[tt.expectSubRoom] {
+					t.Errorf("expected DM room %q to be tracked", tt.expectSubRoom)
+				}
+
+				// Check subscription was sent
+				writes := mockWs.GetWrites()
+				foundSub := false
+				for _, w := range writes {
+					if msg, ok := w.(ddpMessage); ok && msg.Msg == "sub" && msg.Name == "stream-room-messages" {
+						foundSub = true
+						break
+					}
+				}
+				if !foundSub {
+					t.Error("expected subscription message to be sent")
+				}
+			}
+		})
+	}
+}
+
+func TestClient_HandleRoomMessage_NonDMIgnored(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
 
 	client := &Client{
 		api: &APIClient{
-			token:  "test-token",
-			userID: "test-user",
+			userID: "bot-user-123",
 		},
-		pending: make(map[string]string),
-		logger:  logger,
+		dmRooms:   map[string]bool{"dm-room": true},
+		generator: &mockResponseGenerator{response: "test"},
+		logger:    logger,
 	}
 
-	// Mock WebSocket (local implementation, not using testutil)
-	writes := []interface{}{}
-	client.wsMu.Lock()
-	client.ws = &mockWs{writes: &writes}
-	client.wsMu.Unlock()
+	// Message in a non-DM room
+	msgData := map[string]interface{}{
+		"rid": "channel-room", // Not in dmRooms
+		"msg": "Hello",
+		"_id": "msg123",
+		"u": map[string]interface{}{
+			"_id":      "user-789",
+			"username": "testuser",
+		},
+	}
 
 	msg := &ddpMessage{
-		Msg: "connected",
+		Msg:        "changed",
+		Collection: "stream-room-messages",
+		Fields: map[string]interface{}{
+			"args": []interface{}{msgData},
+		},
 	}
 
-	client.processMessage(msg, []string{})
+	// Should not trigger handleDMResponse (would panic if it did due to nil API methods)
+	client.handleRoomMessage(msg)
+}
 
-	// Verify login method was called
-	if len(writes) == 0 {
-		t.Fatal("expected login message to be sent")
+func TestClient_SetTypingIndicator(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	tests := []struct {
+		name   string
+		typing bool
+	}{
+		{name: "typing_true", typing: true},
+		{name: "typing_false", typing: false},
 	}
 
-	loginMsg, ok := writes[0].(ddpMessage)
-	if !ok || loginMsg.Method != "login" {
-		t.Errorf("expected login message, got %+v", writes[0])
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &Client{
+				api:      &APIClient{userID: "bot-user"},
+				username: "botuser",
+				pending:  make(map[string]string),
+				logger:   logger,
+			}
+
+			mockWs := testutil.NewMockWsConn()
+			client.wsMu.Lock()
+			client.ws = mockWs
+			client.wsMu.Unlock()
+
+			err := client.setTypingIndicator("room-123", tt.typing)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			writes := mockWs.GetWrites()
+			if len(writes) == 0 {
+				t.Fatal("expected typing indicator message")
+			}
+
+			msg, ok := writes[0].(ddpMessage)
+			if !ok || msg.Method != "stream-notify-room" {
+				t.Errorf("expected stream-notify-room call, got %+v", writes[0])
+			}
+		})
 	}
 }
 
-// mockWs is a minimal WebSocket mock for white-box testing
-type mockWs struct {
-	writes *[]interface{}
+func TestClient_NewClient(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	generator := &mockResponseGenerator{response: "test"}
+
+	client := NewClient(
+		"https://chat.example.com",
+		"user-123",
+		"token-456",
+		"testbot",
+		generator,
+		true,
+		false,
+		logger,
+	)
+
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+	if client.api == nil {
+		t.Error("expected API client to be initialized")
+	}
+	if client.name != "testbot" {
+		t.Errorf("name = %q, want testbot", client.name)
+	}
+	if !client.streamedOutput {
+		t.Error("expected streamedOutput to be true")
+	}
+	if client.threadDefault {
+		t.Error("expected threadDefault to be false")
+	}
+	if client.pending == nil || client.rooms == nil || client.dmRooms == nil {
+		t.Error("expected maps to be initialized")
+	}
 }
 
-func (m *mockWs) ReadJSON(v interface{}) error {
-	return fmt.Errorf("not implemented")
+func TestClient_Stop(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	client := &Client{
+		stopChan: make(chan struct{}),
+		logger:   logger,
+	}
+
+	mockWs := testutil.NewMockWsConn()
+	client.ws = mockWs
+
+	client.Stop()
+
+	// Check stopChan is closed
+	select {
+	case <-client.stopChan:
+		// Expected
+	default:
+		t.Error("expected stopChan to be closed")
+	}
+
+	// Verify WebSocket was closed
+	if !mockWs.IsClosed() {
+		t.Error("expected WebSocket to be closed")
+	}
 }
 
-func (m *mockWs) WriteJSON(v interface{}) error {
-	*m.writes = append(*m.writes, v)
-	return nil
+func TestClient_API(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	apiClient := NewAPIClient("https://test.com", "user", "token", nil, logger)
+	client := &Client{
+		api:    apiClient,
+		logger: logger,
+	}
+
+	if client.API() != apiClient {
+		t.Error("API() should return the underlying APIClient")
+	}
 }
 
-func (m *mockWs) Close() error {
-	return nil
+func TestClient_GenerateID(t *testing.T) {
+	// Test that generateID produces non-empty hex strings
+	seen := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		id := generateID()
+		if id == "" {
+			t.Error("generateID returned empty string")
+		}
+		if seen[id] {
+			t.Errorf("generateID produced duplicate: %s", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestClient_HandleNonStreamingResponse(t *testing.T) {
+	tests := []struct {
+		name           string
+		message        Message
+		threadDefault  bool
+		postErr        bool
+		generateErr    bool
+		updateErr      bool
+		expectThreadID string
+	}{
+		{
+			name: "success_no_thread",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			threadDefault:  false,
+			expectThreadID: "",
+		},
+		{
+			name: "success_with_thread_command",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello /thread",
+			},
+			threadDefault:  false,
+			expectThreadID: "msg123",
+		},
+		{
+			name: "success_thread_default",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			threadDefault:  true,
+			expectThreadID: "msg123",
+		},
+		{
+			name: "post_message_error",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			postErr: true,
+		},
+		{
+			name: "generate_response_error",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			generateErr: true,
+		},
+		{
+			name: "update_message_error",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			updateErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var postCalled, updateCalled bool
+			var postedThreadID string
+
+			rt := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if strings.Contains(r.URL.Path, "/api/v1/chat.postMessage") {
+					postCalled = true
+					if tt.postErr {
+						return &http.Response{
+							StatusCode: http.StatusInternalServerError,
+							Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
+						}, nil
+					}
+					// Decode body to check threadID
+					var payload map[string]interface{}
+					json.NewDecoder(r.Body).Decode(&payload)
+					if tmid, ok := payload["tmid"].(string); ok {
+						postedThreadID = tmid
+					}
+					resp := map[string]interface{}{
+						"message": map[string]interface{}{"_id": "posted-msg-id"},
+						"success": true,
+					}
+					body, _ := json.Marshal(resp)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
+				}
+				if strings.Contains(r.URL.Path, "/api/v1/chat.update") {
+					updateCalled = true
+					if tt.updateErr {
+						return &http.Response{
+							StatusCode: http.StatusInternalServerError,
+							Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
+						}, nil
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+					}, nil
+				}
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte("")))}, nil
+			})
+
+			logger := testutil.NewTestLogger(t)
+			httpClient := &http.Client{Transport: rt}
+			apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+			var genErr error
+			if tt.generateErr {
+				genErr = fmt.Errorf("generation failed")
+			}
+			generator := &mockResponseGenerator{response: "generated response", err: genErr}
+
+			client := &Client{
+				api:           apiClient,
+				generator:     generator,
+				threadDefault: tt.threadDefault,
+				logger:        logger,
+			}
+
+			ctx := context.Background()
+			client.handleNonStreamingResponse(ctx, tt.message, []Message{})
+
+			if !tt.postErr && !postCalled {
+				t.Error("expected PostMessage to be called")
+			}
+			if !tt.postErr && !tt.generateErr && !updateCalled {
+				t.Error("expected UpdateMessage to be called")
+			}
+			if tt.expectThreadID != "" && postedThreadID != tt.expectThreadID {
+				t.Errorf("posted threadID = %q, want %q", postedThreadID, tt.expectThreadID)
+			}
+		})
+	}
+}
+
+func TestClient_HandleStreamingResponse(t *testing.T) {
+	tests := []struct {
+		name           string
+		message        Message
+		chunks         []string
+		threadDefault  bool
+		postErr        bool
+		expectThreadID string
+	}{
+		{
+			name: "success_streams_chunks",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			chunks:         []string{"chunk1", "chunk2", "chunk3"},
+			threadDefault:  false,
+			expectThreadID: "",
+		},
+		{
+			name: "thread_command",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello /thread",
+			},
+			chunks:         []string{"response"},
+			threadDefault:  false,
+			expectThreadID: "msg123",
+		},
+		{
+			name: "post_error",
+			message: Message{
+				ID:     "msg123",
+				RoomID: "room456",
+				Text:   "hello",
+			},
+			chunks:  []string{"chunk1"},
+			postErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var postCalled bool
+			var updateCount int
+			var postedThreadID string
+
+			rt := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if strings.Contains(r.URL.Path, "/api/v1/chat.postMessage") {
+					postCalled = true
+					if tt.postErr {
+						return &http.Response{
+							StatusCode: http.StatusInternalServerError,
+							Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
+						}, nil
+					}
+					var payload map[string]interface{}
+					json.NewDecoder(r.Body).Decode(&payload)
+					if tmid, ok := payload["tmid"].(string); ok {
+						postedThreadID = tmid
+					}
+					resp := map[string]interface{}{
+						"message": map[string]interface{}{"_id": "posted-msg-id"},
+						"success": true,
+					}
+					body, _ := json.Marshal(resp)
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
+				}
+				if strings.Contains(r.URL.Path, "/api/v1/chat.update") {
+					updateCount++
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+					}, nil
+				}
+				return &http.Response{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte("")))}, nil
+			})
+
+			logger := testutil.NewTestLogger(t)
+			httpClient := &http.Client{Transport: rt}
+			apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+			generator := &mockStreamingGenerator{chunks: tt.chunks}
+
+			client := &Client{
+				api:           apiClient,
+				generator:     generator,
+				threadDefault: tt.threadDefault,
+				logger:        logger,
+			}
+
+			ctx := context.Background()
+			client.handleStreamingResponse(ctx, tt.message, []Message{}, generator)
+
+			if !tt.postErr && !postCalled {
+				t.Error("expected PostMessage to be called")
+			}
+			if !tt.postErr && updateCount == 0 {
+				t.Error("expected UpdateMessage to be called at least once")
+			}
+			if tt.expectThreadID != "" && postedThreadID != tt.expectThreadID {
+				t.Errorf("posted threadID = %q, want %q", postedThreadID, tt.expectThreadID)
+			}
+		})
+	}
+}
+
+// mockStreamingGenerator implements StreamingGenerator for tests
+type mockStreamingGenerator struct {
+	chunks []string
+	err    error
+}
+
+func (m *mockStreamingGenerator) GenerateResponse(ctx context.Context, message Message, history []Message) (string, error) {
+	return strings.Join(m.chunks, ""), m.err
+}
+
+func (m *mockStreamingGenerator) GenerateResponseStream(ctx context.Context, message Message, history []Message) (<-chan string, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	ch := make(chan string)
+	go func() {
+		defer close(ch)
+		for _, chunk := range m.chunks {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- chunk:
+			}
+		}
+	}()
+	return ch, nil
 }

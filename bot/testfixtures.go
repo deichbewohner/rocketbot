@@ -1,16 +1,14 @@
-package testutil
+package bot
 
 import (
 	"testing"
 	"time"
-
-	"github.com/deichbewohner/rocketbot/bot"
 )
 
 // MessageBuilder provides a fluent API for creating test messages
 type MessageBuilder struct {
 	t   *testing.T
-	msg bot.Message
+	msg Message
 }
 
 // NewMessage creates a new message builder with sensible defaults
@@ -18,12 +16,12 @@ func NewMessage(t *testing.T) *MessageBuilder {
 	t.Helper()
 	return &MessageBuilder{
 		t: t,
-		msg: bot.Message{
+		msg: Message{
 			ID:        "msg-test-123",
 			Text:      "test message",
 			RoomID:    "room-test-456",
 			Timestamp: time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC),
-			User: bot.MessageUser{
+			User: MessageUser{
 				ID:       "user-test-789",
 				Username: "testuser",
 				Name:     "Test User",
@@ -70,7 +68,7 @@ func (b *MessageBuilder) WithTimestamp(ts time.Time) *MessageBuilder {
 // WithUser sets the user information
 func (b *MessageBuilder) WithUser(id, username, name string) *MessageBuilder {
 	b.t.Helper()
-	b.msg.User = bot.MessageUser{
+	b.msg.User = MessageUser{
 		ID:       id,
 		Username: username,
 		Name:     name,
@@ -79,7 +77,7 @@ func (b *MessageBuilder) WithUser(id, username, name string) *MessageBuilder {
 }
 
 // Build returns the constructed message
-func (b *MessageBuilder) Build() bot.Message {
+func (b *MessageBuilder) Build() Message {
 	b.t.Helper()
 	return b.msg
 }
