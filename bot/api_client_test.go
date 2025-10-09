@@ -623,81 +623,42 @@ func TestAPIClient_FetchMessage(t *testing.T) {
 
 func TestAPIClient_FetchThreadHistory(t *testing.T) {
 	tests := []struct {
-		name         string
-		roundTripper testutil.RoundTripperFunc
-		wantCount    int
-		wantNil      bool
-		validate     func(*testing.T, []bot.Message)
+		name      string
+		responses []*http.Response
+		wantCount int
+		wantNil   bool
+		validate  func(*testing.T, []bot.Message)
 	}{
 		{
 			name: "success_with_starter_and_replies",
-			roundTripper: func(r *http.Request) (*http.Response, error) {
-				// First call: FetchMessage for starter
-				if strings.Contains(r.URL.Path, "/api/v1/chat.getMessage") {
-					resp := map[string]interface{}{
-						"message": map[string]interface{}{
+			responses: []*http.Response{
+				// Call 1: FetchMessage for starter
+				{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(bytes.NewReader([]byte(`{
+						"message": {
 							"_id": "thread-start",
 							"msg": "Thread starter",
 							"rid": "room1",
-							"ts":  "1609459200000",
-							"u": map[string]interface{}{
-								"_id":      "user1",
-								"username": "user1",
-								"name":     "User One",
-							},
+							"ts": "1609459200000",
+							"u": {"_id": "user1", "username": "user1", "name": "User One"}
 						},
-						"success": true,
-					}
-					body, _ := json.Marshal(resp)
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader(body)),
-						Header:     make(http.Header),
-					}, nil
-				}
-
-				// Second call: getThreadMessages for replies
-				if strings.Contains(r.URL.Path, "/api/v1/chat.getThreadMessages") {
-					resp := map[string]interface{}{
-						"messages": []map[string]interface{}{
-							{
-								"_id": "reply1",
-								"msg": "First reply",
-								"rid": "room1",
-								"ts":  "1609459300000",
-								"u": map[string]interface{}{
-									"_id":      "user2",
-									"username": "user2",
-									"name":     "User Two",
-								},
-							},
-							{
-								"_id": "reply2",
-								"msg": "Second reply",
-								"rid": "room1",
-								"ts":  "1609459400000",
-								"u": map[string]interface{}{
-									"_id":      "user3",
-									"username": "user3",
-									"name":     "User Three",
-								},
-							},
-						},
-						"success": true,
-					}
-					body, _ := json.Marshal(resp)
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader(body)),
-						Header:     make(http.Header),
-					}, nil
-				}
-
-				return &http.Response{
-					StatusCode: http.StatusNotFound,
-					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
-					Header:     make(http.Header),
-				}, nil
+						"success": true
+					}`))),
+					Header: make(http.Header),
+				},
+				// Call 2: getThreadMessages for replies
+				{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(bytes.NewReader([]byte(`{
+						"messages": [
+							{"_id": "reply1", "msg": "First reply", "rid": "room1", "ts": "1609459300000", "u": {"_id": "user2", "username": "user2", "name": "User Two"}},
+							{"_id": "reply2", "msg": "Second reply", "rid": "room1", "ts": "1609459400000", "u": {"_id": "user3", "username": "user3", "name": "User Three"}}
+						],
+						"success": true
+					}`))),
+					Header: make(http.Header),
+				},
 			},
 			wantCount: 3, // starter + 2 replies
 			validate: func(t *testing.T, messages []bot.Message) {
@@ -727,97 +688,67 @@ func TestAPIClient_FetchThreadHistory(t *testing.T) {
 		},
 		{
 			name: "starter_fetch_fails",
-			roundTripper: func(r *http.Request) (*http.Response, error) {
-				// Fail on starter message fetch
-				if strings.Contains(r.URL.Path, "/api/v1/chat.getMessage") {
-					return &http.Response{
-						StatusCode: http.StatusNotFound,
-						Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
-						Header:     make(http.Header),
-					}, nil
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader([]byte(`{"messages":[],"success":true}`))),
+			responses: []*http.Response{
+				// Call 1: FetchMessage fails
+				{
+					StatusCode: http.StatusNotFound,
+					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
 					Header:     make(http.Header),
-				}, nil
+				},
 			},
 			wantNil: true,
 		},
 		{
 			name: "thread_replies_fetch_fails",
-			roundTripper: func(r *http.Request) (*http.Response, error) {
-				// Starter succeeds
-				if strings.Contains(r.URL.Path, "/api/v1/chat.getMessage") {
-					resp := map[string]interface{}{
-						"message": map[string]interface{}{
+			responses: []*http.Response{
+				// Call 1: FetchMessage for starter succeeds
+				{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(bytes.NewReader([]byte(`{
+						"message": {
 							"_id": "thread-start",
 							"msg": "Thread starter",
 							"rid": "room1",
-							"ts":  "1609459200000",
-							"u": map[string]interface{}{
-								"_id":      "user1",
-								"username": "user1",
-								"name":     "User One",
-							},
+							"ts": "1609459200000",
+							"u": {"_id": "user1", "username": "user1", "name": "User One"}
 						},
-						"success": true,
-					}
-					body, _ := json.Marshal(resp)
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader(body)),
-						Header:     make(http.Header),
-					}, nil
-				}
-
-				// Thread replies fetch fails
-				return &http.Response{
+						"success": true
+					}`))),
+					Header: make(http.Header),
+				},
+				// Call 2: getThreadMessages fails
+				{
 					StatusCode: http.StatusInternalServerError,
 					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
 					Header:     make(http.Header),
-				}, nil
+				},
 			},
 			wantNil: true,
 		},
 		{
 			name: "empty_thread",
-			roundTripper: func(r *http.Request) (*http.Response, error) {
-				// Starter succeeds
-				if strings.Contains(r.URL.Path, "/api/v1/chat.getMessage") {
-					resp := map[string]interface{}{
-						"message": map[string]interface{}{
+			responses: []*http.Response{
+				// Call 1: FetchMessage for starter
+				{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(bytes.NewReader([]byte(`{
+						"message": {
 							"_id": "thread-start",
 							"msg": "Thread starter",
 							"rid": "room1",
-							"ts":  "1609459200000",
-							"u": map[string]interface{}{
-								"_id":      "user1",
-								"username": "user1",
-								"name":     "User One",
-							},
+							"ts": "1609459200000",
+							"u": {"_id": "user1", "username": "user1", "name": "User One"}
 						},
-						"success": true,
-					}
-					body, _ := json.Marshal(resp)
-					return &http.Response{
-						StatusCode: http.StatusOK,
-						Body:       io.NopCloser(bytes.NewReader(body)),
-						Header:     make(http.Header),
-					}, nil
-				}
-
-				// No replies
-				resp := map[string]interface{}{
-					"messages": []map[string]interface{}{},
-					"success":  true,
-				}
-				body, _ := json.Marshal(resp)
-				return &http.Response{
+						"success": true
+					}`))),
+					Header: make(http.Header),
+				},
+				// Call 2: getThreadMessages returns empty
+				{
 					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(body)),
+					Body:       io.NopCloser(bytes.NewReader([]byte(`{"messages":[],"success":true}`))),
 					Header:     make(http.Header),
-				}, nil
+				},
 			},
 			wantCount: 1, // Just the starter
 		},
@@ -825,7 +756,14 @@ func TestAPIClient_FetchThreadHistory(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &http.Client{Transport: tt.roundTripper}
+			i := 0
+			roundTripper := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				resp := tt.responses[i]
+				i++
+				return resp, nil
+			})
+
+			client := &http.Client{Transport: roundTripper}
 			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
 
 			messages := api.FetchThreadHistory(context.Background(), "thread-start", 10)
