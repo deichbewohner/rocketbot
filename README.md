@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-light.webp">
-  <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo-dark.webp">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo-light.webp">
   <img alt="rocketbot" src=".github/assets/logo-dark.webp" width="400">
 </picture>
 
