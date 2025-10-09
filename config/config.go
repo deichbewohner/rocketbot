@@ -10,16 +10,17 @@ import (
 
 // BotConfig holds configuration for a single bot instance
 type BotConfig struct {
-	Slug           string // URL-safe identifier used in HTTP API endpoints
-	URL            string
-	UserID         string
-	Token          string
-	WebhookURL     string
-	WebhookAuth    string
+	Slug          string // URL-safe identifier used in HTTP API endpoints
+	URL           string
+	UserID        string
+	Token         string
+	WebhookURL    string
+	WebhookAuth   string
 	StreamedOutput bool
-	ParserType     string // Stream parser type (e.g., "n8n", "sse", "openai")
-	APIToken       string // HTTP API authentication token
-	ThreadDefault  bool   // Always reply in threads (default: false)
+	ParserType    string // Stream parser type (e.g., "n8n", "sse", "openai")
+	APIToken      string // HTTP API authentication token
+	ThreadDefault bool   // Always reply in threads (default: false)
+	StatusMessage string // Custom status message (optional, defaults to "Bot is active")
 }
 
 // Config holds all bot configurations
@@ -68,6 +69,7 @@ func Load() (*Config, error) {
 		parserType := os.Getenv(prefix + "PARSER_TYPE")
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
+		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
 
 		// Validate required fields
 		if slug == "" {
@@ -119,6 +121,7 @@ func Load() (*Config, error) {
 			ParserType:     parserType,
 			APIToken:       apiToken,
 			ThreadDefault:  enableThreadDefault,
+			StatusMessage:  statusMessage,
 		})
 	}
 

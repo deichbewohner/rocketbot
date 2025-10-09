@@ -122,6 +122,25 @@ func TestN8nParser_Parse(t *testing.T) {
 				{Type: bot.EventMessageChunk, Content: strings.Repeat("A", 100000)},
 			},
 		},
+		{
+			name: "content_wrong_type_skipped",
+			input: `{"type":"item","content":123}
+{"type":"item","content":"Valid"}
+{"type":"item","content":true}
+`,
+			wantEvents: []bot.StreamEvent{
+				{Type: bot.EventMessageChunk, Content: "Valid"},
+			},
+		},
+		{
+			name: "content_field_missing_skipped",
+			input: `{"type":"item"}
+{"type":"item","content":"Valid"}
+`,
+			wantEvents: []bot.StreamEvent{
+				{Type: bot.EventMessageChunk, Content: "Valid"},
+			},
+		},
 	}
 
 	for _, tt := range tests {

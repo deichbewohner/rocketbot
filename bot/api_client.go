@@ -75,10 +75,17 @@ func (a *APIClient) FetchUsername() (string, error) {
 	return result.Username, nil
 }
 
-// SetStatusOnline sets the user's status to online
-func (a *APIClient) SetStatusOnline() error {
+// SetStatusOnline sets the user's status to online with an optional custom message
+func (a *APIClient) SetStatusOnline(message string) error {
 	url := fmt.Sprintf("%s/api/v1/users.setStatus", a.baseURL)
-	payload := `{"status":"online","message":"Bot is active"}`
+
+	// Build payload - only include message if provided
+	var payload string
+	if message == "" {
+		payload = `{"status":"online"}`
+	} else {
+		payload = fmt.Sprintf(`{"status":"online","message":%q}`, message)
+	}
 
 	req, err := http.NewRequest("POST", url, strings.NewReader(payload))
 	if err != nil {

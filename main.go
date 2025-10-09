@@ -104,6 +104,7 @@ func createBot(botCfg config.BotConfig, slug string, httpClient *http.Client, lo
 		botCfg.StreamedOutput,
 		botCfg.ThreadDefault,
 		botLogger,
+		botCfg.StatusMessage,
 	)
 
 	return client, nil

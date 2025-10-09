@@ -29,6 +29,7 @@ type Client struct {
 	logger         *slog.Logger
 	streamedOutput bool
 	threadDefault  bool
+	statusMessage  string
 
 	ws       wsConn
 	wsMu     sync.Mutex
@@ -45,6 +46,7 @@ func NewClient(
 	streamedOutput bool,
 	threadDefault bool,
 	logger *slog.Logger,
+	statusMessage string,
 ) *Client {
 	return &Client{
 		api:            NewAPIClient(baseURL, userID, token, nil, logger),
@@ -53,6 +55,7 @@ func NewClient(
 		logger:         logger,
 		streamedOutput: streamedOutput,
 		threadDefault:  threadDefault,
+		statusMessage:  statusMessage,
 		pending:        make(map[string]string),
 		rooms:          make(map[string]bool),
 		dmRooms:        make(map[string]bool),
@@ -90,7 +93,7 @@ func (c *Client) Start() error {
 	c.username = username
 
 	// Set status to online via REST
-	if err := c.api.SetStatusOnline(); err != nil {
+	if err := c.api.SetStatusOnline(c.statusMessage); err != nil {
 		return fmt.Errorf("failed to set status online: %w", err)
 	}
 	c.logger.Info("status set to online")

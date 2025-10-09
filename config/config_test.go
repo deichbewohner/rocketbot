@@ -393,6 +393,53 @@ func TestConfig_BotName(t *testing.T) {
 	}
 }
 
+func TestLoad_StatusMessage(t *testing.T) {
+	tests := []struct {
+		name               string
+		statusMessage      string // empty = not set
+		wantStatusMessage  string
+	}{
+		{
+			name:              "status_message_not_set",
+			statusMessage:     "",
+			wantStatusMessage: "",
+		},
+		{
+			name:              "status_message_custom",
+			statusMessage:     "Alerts Bot Ready",
+			wantStatusMessage: "Alerts Bot Ready",
+		},
+		{
+			name:              "status_message_with_emoji",
+			statusMessage:     "🤖 Bot Active",
+			wantStatusMessage: "🤖 Bot Active",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BOT1_SLUG", "test-bot")
+			t.Setenv("BOT1_URL", "https://chat.example.com")
+			t.Setenv("BOT1_USER_ID", "user123")
+			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_PARSER_TYPE", "n8n")
+			if tt.statusMessage != "" {
+				t.Setenv("BOT1_STATUS_MESSAGE", tt.statusMessage)
+			}
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+
+			bot, _ := cfg.Get(0)
+			if bot.StatusMessage != tt.wantStatusMessage {
+				t.Errorf("StatusMessage = %q, want %q", bot.StatusMessage, tt.wantStatusMessage)
+			}
+		})
+	}
+}
+
 func TestLoad_ValidSlugs(t *testing.T) {
 	tests := []struct {
 		name string

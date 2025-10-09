@@ -827,6 +827,7 @@ func TestClient_NewClient(t *testing.T) {
 		true,
 		false,
 		logger,
+		"",
 	)
 
 	if client == nil {

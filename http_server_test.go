@@ -141,7 +141,7 @@ func TestHTTPServer_HandleSend_ValidationErrors(t *testing.T) {
 
 			// Create a fake client (will be looked up but not used for validation errors)
 			client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
-				nil, false, false, testutil.NewTestLogger(t))
+				nil, false, false, testutil.NewTestLogger(t), "")
 			server.bots["alerts"] = client
 
 			// Marshal payload
@@ -255,7 +255,7 @@ func TestHTTPServer_Authentication(t *testing.T) {
 			// Add a bot client if token is configured
 			if tt.configuredAuth != "" {
 				client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
-					nil, false, false, testutil.NewTestLogger(t))
+					nil, false, false, testutil.NewTestLogger(t), "")
 				server.bots[tt.slug] = client
 			}
 
@@ -342,7 +342,7 @@ func TestHTTPServer_MaxBytesReader(t *testing.T) {
 	}
 
 	client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
-		nil, false, false, testutil.NewTestLogger(t))
+		nil, false, false, testutil.NewTestLogger(t), "")
 	server.bots["alerts"] = client
 
 	// Create a payload larger than 1MB
@@ -463,9 +463,9 @@ func TestHTTPServer_MultipleBots(t *testing.T) {
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
 			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
-				nil, false, false, testutil.NewTestLogger(t)),
+				nil, false, false, testutil.NewTestLogger(t), ""),
 			"notifications": bot.NewClient("https://chat2.local", "user2", "token2", "BOT2",
-				nil, false, false, testutil.NewTestLogger(t)),
+				nil, false, false, testutil.NewTestLogger(t), ""),
 		},
 		tokens: map[string]string{
 			"alerts":        "secret1",
@@ -509,7 +509,7 @@ func TestHTTPServer_BotWithoutAPIToken(t *testing.T) {
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
 			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
-				nil, false, false, testutil.NewTestLogger(t)),
+				nil, false, false, testutil.NewTestLogger(t), ""),
 			// support-bot intentionally not in the map
 		},
 		tokens: map[string]string{

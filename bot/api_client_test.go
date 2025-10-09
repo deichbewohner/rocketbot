@@ -111,11 +111,15 @@ func TestAPIClient_FetchUsername(t *testing.T) {
 func TestAPIClient_SetStatusOnline(t *testing.T) {
 	tests := []struct {
 		name         string
+		message      string
+		wantPayload  string
 		roundTripper testutil.RoundTripperFunc
 		wantErr      bool
 	}{
 		{
-			name: "success",
+			name:        "success_no_message",
+			message:     "",
+			wantPayload: `{"status":"online"}`,
 			roundTripper: func(r *http.Request) (*http.Response, error) {
 				if r.Method != "POST" {
 					t.Errorf("Method = %s, want POST", r.Method)
@@ -136,7 +140,31 @@ func TestAPIClient_SetStatusOnline(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "non_200_status",
+			name:        "success_with_message",
+			message:     "Bot is ready",
+			wantPayload: `{"status":"online","message":"Bot is ready"}`,
+			roundTripper: func(r *http.Request) (*http.Response, error) {
+				if r.Method != "POST" {
+					t.Errorf("Method = %s, want POST", r.Method)
+				}
+				if !strings.HasSuffix(r.URL.Path, "/api/v1/users.setStatus") {
+					t.Errorf("unexpected path: %s", r.URL.Path)
+				}
+				if r.Header.Get("Content-Type") != "application/json" {
+					t.Error("missing Content-Type: application/json")
+				}
+
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
+					Header:     make(http.Header),
+				}, nil
+			},
+			wantErr: false,
+		},
+		{
+			name:    "non_200_status",
+			message: "",
 			roundTripper: func(r *http.Request) (*http.Response, error) {
 				return &http.Response{
 					StatusCode: http.StatusBadRequest,
@@ -153,7 +181,7 @@ func TestAPIClient_SetStatusOnline(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
 			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
 
-			err := api.SetStatusOnline()
+			err := api.SetStatusOnline(tt.message)
 
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("SetStatusOnline() error = %v, wantErr %v", err, tt.wantErr)
