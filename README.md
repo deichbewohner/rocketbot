@@ -8,20 +8,18 @@
 
 **Experimental Rocket.Chat bot with streaming message support. Unmaintained.**
 
-</div>
-
 [![CI](https://github.com/deichbewohner/rocketbot/actions/workflows/ci.yml/badge.svg?branch=release)](https://github.com/deichbewohner/rocketbot/actions/workflows/ci.yml)
 [![Release Workflow](https://github.com/deichbewohner/rocketbot/actions/workflows/release.yml/badge.svg)](https://github.com/deichbewohner/rocketbot/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/releases)
+[![GHCR](https://img.shields.io/badge/ghcr.io-deichbewohner%2Frocketbot-informational)](https://ghcr.io/deichbewohner/rocketbot)
 
 [![CodeQL](https://github.com/deichbewohner/rocketbot/actions/workflows/github-code-scanning/codeql/badge.svg?branch=release)](https://github.com/deichbewohner/rocketbot/actions/workflows/github-code-scanning/codeql)
 [![Coverage](https://codecov.io/gh/deichbewohner/rocketbot/branch/release/graph/badge.svg)](https://codecov.io/gh/deichbewohner/rocketbot)
 [![Go Report Card](https://goreportcard.com/badge/github.com/deichbewohner/rocketbot)](https://goreportcard.com/report/github.com/deichbewohner/rocketbot)
-
-[![Latest Release](https://img.shields.io/github/v/release/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/releases)
-[![GHCR](https://img.shields.io/badge/ghcr.io-deichbewohner%2Frocketbot-informational)](https://ghcr.io/deichbewohner/rocketbot)
-
 [![Go Version](https://img.shields.io/github/go-mod/go-version/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/blob/release/go.mod)
 [![License](https://img.shields.io/github/license/deichbewohner/rocketbot)](https://github.com/deichbewohner/rocketbot/blob/release/LICENSE)
+
+</div>
 
 ## Security
 
@@ -59,10 +57,11 @@ vim .env
 ```bash
 # Enable in .env (bind to loopback)
 API_ADDR=127.0.0.1:8080
+BOT1_SLUG=bob
 BOT1_API_TOKEN=secret123
 
 # Send message directly (no generator)
-curl -X POST http://localhost:8080/api/v1/bots/BOT1/send \
+curl -X POST http://localhost:8080/api/v1/bots/bob/send \
   -H "Authorization: Bearer secret123" \
   -H "Content-Type: application/json" \
   -d '{"target":{"username":"alice"},"text":"Hello"}'
@@ -72,10 +71,3 @@ Target must specify exactly one of:
 - `{"username": "alice"}` - Send DM to user
 - `{"channel": "general"}` - Post to channel (# optional)
 - `{"roomId": "ABC123"}` - Post to room ID
-
-## Architecture
-
-- **Generator Interface**: Implement `ResponseGenerator` for basic responses,
-  add `GenerateResponseStream()` for streaming
-- **1-Second Updates**: Chunks buffered and sent once/second via `chat.update`
-  API
