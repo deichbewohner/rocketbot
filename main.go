@@ -61,12 +61,12 @@ func getLogLevel() slog.Level {
 }
 
 // createBot creates and configures a bot client from config
-func createBot(botCfg config.BotConfig, botName string, httpClient *http.Client, logger *slog.Logger) (*bot.Client, error) {
-	botLogger := logger.With("bot", botName)
+func createBot(botCfg config.BotConfig, slug string, httpClient *http.Client, logger *slog.Logger) (*bot.Client, error) {
+	botLogger := logger.With("bot", slug)
 
 	// Validate webhook URL
 	if botCfg.WebhookURL == "" {
-		return nil, fmt.Errorf("missing webhook url for bot %s", botName)
+		return nil, fmt.Errorf("missing webhook url for bot %s", slug)
 	}
 
 	// Create stream parser based on configuration
@@ -75,7 +75,7 @@ func createBot(botCfg config.BotConfig, botName string, httpClient *http.Client,
 	case "n8n":
 		parser = bot.NewN8nParser(botLogger)
 	default:
-		return nil, fmt.Errorf("unknown parser type %q for bot %s", botCfg.ParserType, botName)
+		return nil, fmt.Errorf("unknown parser type %q for bot %s", botCfg.ParserType, slug)
 	}
 
 	// Create webhook generator with injected parser
@@ -99,7 +99,7 @@ func createBot(botCfg config.BotConfig, botName string, httpClient *http.Client,
 		botCfg.URL,
 		botCfg.UserID,
 		botCfg.Token,
-		botName,
+		slug,
 		generator,
 		botCfg.StreamedOutput,
 		botCfg.ThreadDefault,
@@ -178,23 +178,22 @@ func main() {
 
 	for i := 0; i < cfg.Count(); i++ {
 		botCfg, _ := cfg.Get(i)
-		botName := cfg.BotName(i)
 
-		client, err := createBot(botCfg, botName, httpClient, logger)
+		client, err := createBot(botCfg, botCfg.Slug, httpClient, logger)
 		if err != nil {
-			logger.Error("failed to create bot", "bot", botName, "error", err)
+			logger.Error("failed to create bot", "bot", botCfg.Slug, "error", err)
 			os.Exit(1)
 		}
 		clients = append(clients, client)
 
 		wg.Add(1)
-		go func(c *bot.Client, name string) {
+		go func(c *bot.Client, slug string) {
 			defer wg.Done()
 			if err := c.Start(); err != nil {
-				logger.Error("failed to start bot", "bot", name, "error", err)
+				logger.Error("failed to start bot", "bot", slug, "error", err)
 				os.Exit(1)
 			}
-		}(client, botName)
+		}(client, botCfg.Slug)
 	}
 
 	logger.Info("all bots started successfully")
@@ -202,18 +201,17 @@ func main() {
 	// Start HTTP API server if configured
 	apiAddr := os.Getenv("API_ADDR")
 	if apiAddr != "" {
-		// Build bot map and token map - only include bots with API tokens configured
+		// Build bot map and token map using slugs - only include bots with API tokens configured
 		botMap := make(map[string]*bot.Client)
 		tokenMap := make(map[string]string)
 
 		for i := 0; i < cfg.Count(); i++ {
 			botCfg, _ := cfg.Get(i)
-			botName := cfg.BotName(i)
 
 			// Only expose bots via HTTP API if they have an API token configured
 			if botCfg.APIToken != "" {
-				botMap[botName] = clients[i]
-				tokenMap[botName] = botCfg.APIToken
+				botMap[botCfg.Slug] = clients[i]
+				tokenMap[botCfg.Slug] = botCfg.APIToken
 			}
 		}
 

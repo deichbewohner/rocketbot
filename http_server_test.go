@@ -132,17 +132,17 @@ func TestHTTPServer_HandleSend_ValidationErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create minimal server
+			// Create minimal server with slug
 			server := &HTTPServer{
 				bots:   make(map[string]*bot.Client),
-				tokens: map[string]string{"BOT1": "secret"},
+				tokens: map[string]string{"alerts": "secret"},
 				logger: testutil.NewTestLogger(t),
 			}
 
 			// Create a fake client (will be looked up but not used for validation errors)
 			client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
 				nil, false, false, testutil.NewTestLogger(t))
-			server.bots["BOT1"] = client
+			server.bots["alerts"] = client
 
 			// Marshal payload
 			var payloadBytes []byte
@@ -152,8 +152,8 @@ func TestHTTPServer_HandleSend_ValidationErrors(t *testing.T) {
 				payloadBytes, _ = json.Marshal(tt.payload)
 			}
 
-			req := httptest.NewRequest("POST", "/api/v1/bots/BOT1/send", bytes.NewReader(payloadBytes))
-			req.SetPathValue("botName", "BOT1")
+			req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+			req.SetPathValue("slug", "alerts")
 			req.Header.Set("Authorization", "Bearer secret")
 			w := httptest.NewRecorder()
 
@@ -176,16 +176,16 @@ func TestHTTPServer_HandleSend_ValidationErrors(t *testing.T) {
 func TestHTTPServer_HandleSend_BotNotFound(t *testing.T) {
 	server := &HTTPServer{
 		bots:   make(map[string]*bot.Client),
-		tokens: map[string]string{"BOT1": "secret", "BOT99": "secret99"},
+		tokens: map[string]string{"alerts": "secret", "missing-bot": "secret99"},
 		logger: testutil.NewTestLogger(t),
 	}
 
 	payload := map[string]interface{}{"target": map[string]string{"username": "alice"}, "text": "Hello"}
 	payloadBytes, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest("POST", "/api/v1/bots/BOT99/send", bytes.NewReader(payloadBytes))
-	req.SetPathValue("botName", "BOT99")
-	req.Header.Set("Authorization", "Bearer secret99") // Use correct token for BOT99
+	req := httptest.NewRequest("POST", "/api/v1/bots/missing-bot/send", bytes.NewReader(payloadBytes))
+	req.SetPathValue("slug", "missing-bot")
+	req.Header.Set("Authorization", "Bearer secret99") // Use correct token for missing-bot
 	w := httptest.NewRecorder()
 
 	server.handleSend(w, req)
@@ -204,7 +204,7 @@ func TestHTTPServer_HandleSend_BotNotFound(t *testing.T) {
 func TestHTTPServer_Authentication(t *testing.T) {
 	tests := []struct {
 		name           string
-		botName        string
+		slug           string
 		authHeader     string
 		configuredAuth string
 		wantStatusCode int
@@ -212,7 +212,7 @@ func TestHTTPServer_Authentication(t *testing.T) {
 	}{
 		{
 			name:           "missing_authorization_header",
-			botName:        "BOT1",
+			slug:           "alerts",
 			authHeader:     "",
 			configuredAuth: "secret123",
 			wantStatusCode: http.StatusUnauthorized,
@@ -220,7 +220,7 @@ func TestHTTPServer_Authentication(t *testing.T) {
 		},
 		{
 			name:           "invalid_token",
-			botName:        "BOT1",
+			slug:           "alerts",
 			authHeader:     "Bearer wrongtoken",
 			configuredAuth: "secret123",
 			wantStatusCode: http.StatusUnauthorized,
@@ -228,7 +228,7 @@ func TestHTTPServer_Authentication(t *testing.T) {
 		},
 		{
 			name:           "malformed_auth_header",
-			botName:        "BOT1",
+			slug:           "alerts",
 			authHeader:     "NotBearer secret123",
 			configuredAuth: "secret123",
 			wantStatusCode: http.StatusUnauthorized,
@@ -236,7 +236,7 @@ func TestHTTPServer_Authentication(t *testing.T) {
 		},
 		{
 			name:           "bot_has_no_token_configured",
-			botName:        "BOT2",
+			slug:           "notifications",
 			authHeader:     "Bearer anything",
 			configuredAuth: "",
 			wantStatusCode: http.StatusUnauthorized,
@@ -248,22 +248,22 @@ func TestHTTPServer_Authentication(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := &HTTPServer{
 				bots:   make(map[string]*bot.Client),
-				tokens: map[string]string{tt.botName: tt.configuredAuth},
+				tokens: map[string]string{tt.slug: tt.configuredAuth},
 				logger: testutil.NewTestLogger(t),
 			}
 
 			// Add a bot client if token is configured
 			if tt.configuredAuth != "" {
-				client := bot.NewClient("https://test.local", "user1", "token1", tt.botName,
+				client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
 					nil, false, false, testutil.NewTestLogger(t))
-				server.bots[tt.botName] = client
+				server.bots[tt.slug] = client
 			}
 
 			payload := map[string]interface{}{"target": map[string]string{"username": "alice"}, "text": "Hello"}
 			payloadBytes, _ := json.Marshal(payload)
 
-			req := httptest.NewRequest("POST", "/api/v1/bots/"+tt.botName+"/send", bytes.NewReader(payloadBytes))
-			req.SetPathValue("botName", tt.botName)
+			req := httptest.NewRequest("POST", "/api/v1/bots/"+tt.slug+"/send", bytes.NewReader(payloadBytes))
+			req.SetPathValue("slug", tt.slug)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -337,13 +337,13 @@ func TestHTTPServer_LoggingMiddleware(t *testing.T) {
 func TestHTTPServer_MaxBytesReader(t *testing.T) {
 	server := &HTTPServer{
 		bots:   make(map[string]*bot.Client),
-		tokens: map[string]string{"BOT1": "secret"},
+		tokens: map[string]string{"alerts": "secret"},
 		logger: testutil.NewTestLogger(t),
 	}
 
 	client := bot.NewClient("https://test.local", "user1", "token1", "BOT1",
 		nil, false, false, testutil.NewTestLogger(t))
-	server.bots["BOT1"] = client
+	server.bots["alerts"] = client
 
 	// Create a payload larger than 1MB
 	largePayload := map[string]interface{}{
@@ -352,8 +352,8 @@ func TestHTTPServer_MaxBytesReader(t *testing.T) {
 	}
 	payloadBytes, _ := json.Marshal(largePayload)
 
-	req := httptest.NewRequest("POST", "/api/v1/bots/BOT1/send", bytes.NewReader(payloadBytes))
-	req.SetPathValue("botName", "BOT1")
+	req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+	req.SetPathValue("slug", "alerts")
 	req.Header.Set("Authorization", "Bearer secret")
 	w := httptest.NewRecorder()
 
@@ -462,36 +462,36 @@ func TestHTTPServer_WriteError(t *testing.T) {
 func TestHTTPServer_MultipleBots(t *testing.T) {
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
-			"BOT1": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
+			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
 				nil, false, false, testutil.NewTestLogger(t)),
-			"BOT2": bot.NewClient("https://chat2.local", "user2", "token2", "BOT2",
+			"notifications": bot.NewClient("https://chat2.local", "user2", "token2", "BOT2",
 				nil, false, false, testutil.NewTestLogger(t)),
 		},
 		tokens: map[string]string{
-			"BOT1": "secret1",
-			"BOT2": "secret2",
+			"alerts":        "secret1",
+			"notifications": "secret2",
 		},
 		logger: testutil.NewTestLogger(t),
 	}
 
-	// Test that BOT1 token doesn't work for BOT2
+	// Test that alerts token doesn't work for notifications
 	payload := map[string]interface{}{"target": map[string]string{"username": "alice"}, "text": "Hello"}
 	payloadBytes, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest("POST", "/api/v1/bots/BOT2/send", bytes.NewReader(payloadBytes))
-	req.SetPathValue("botName", "BOT2")
+	req := httptest.NewRequest("POST", "/api/v1/bots/notifications/send", bytes.NewReader(payloadBytes))
+	req.SetPathValue("slug", "notifications")
 	req.Header.Set("Authorization", "Bearer secret1") // Wrong token
 	w := httptest.NewRecorder()
 
 	server.handleSend(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status code = %d, want %d (BOT1 token should not work for BOT2)", w.Code, http.StatusUnauthorized)
+		t.Errorf("status code = %d, want %d (alerts token should not work for notifications)", w.Code, http.StatusUnauthorized)
 	}
 
 	// Now try with correct token
-	req = httptest.NewRequest("POST", "/api/v1/bots/BOT2/send", bytes.NewReader(payloadBytes))
-	req.SetPathValue("botName", "BOT2")
+	req = httptest.NewRequest("POST", "/api/v1/bots/notifications/send", bytes.NewReader(payloadBytes))
+	req.SetPathValue("slug", "notifications")
 	req.Header.Set("Authorization", "Bearer secret2") // Correct token
 	w = httptest.NewRecorder()
 
@@ -505,16 +505,16 @@ func TestHTTPServer_MultipleBots(t *testing.T) {
 
 // Test that bots without API tokens are not accessible via HTTP API
 func TestHTTPServer_BotWithoutAPIToken(t *testing.T) {
-	// BOT3 is created but deliberately not added to the server (simulating no API token)
+	// support-bot is created but deliberately not added to the server (simulating no API token)
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
-			"BOT1": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
+			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
 				nil, false, false, testutil.NewTestLogger(t)),
-			// BOT3 intentionally not in the map
+			// support-bot intentionally not in the map
 		},
 		tokens: map[string]string{
-			"BOT1": "secret1",
-			// BOT3 has no token configured
+			"alerts": "secret1",
+			// support-bot has no token configured
 		},
 		logger: testutil.NewTestLogger(t),
 	}
@@ -522,8 +522,8 @@ func TestHTTPServer_BotWithoutAPIToken(t *testing.T) {
 	payload := map[string]interface{}{"target": map[string]string{"username": "alice"}, "text": "Hello"}
 	payloadBytes, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest("POST", "/api/v1/bots/BOT3/send", bytes.NewReader(payloadBytes))
-	req.SetPathValue("botName", "BOT3")
+	req := httptest.NewRequest("POST", "/api/v1/bots/support-bot/send", bytes.NewReader(payloadBytes))
+	req.SetPathValue("slug", "support-bot")
 	req.Header.Set("Authorization", "Bearer some-token")
 	w := httptest.NewRecorder()
 
@@ -531,7 +531,7 @@ func TestHTTPServer_BotWithoutAPIToken(t *testing.T) {
 
 	// Should be rejected with unauthorized (no token configured for this bot)
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status code = %d, want %d (BOT3 should not be accessible without API token)", w.Code, http.StatusUnauthorized)
+		t.Errorf("status code = %d, want %d (support-bot should not be accessible without API token)", w.Code, http.StatusUnauthorized)
 	}
 
 	var resp sendResponse

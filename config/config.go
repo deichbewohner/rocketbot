@@ -3,12 +3,14 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
 
 // BotConfig holds configuration for a single bot instance
 type BotConfig struct {
+	Slug           string // URL-safe identifier used in HTTP API endpoints
 	URL            string
 	UserID         string
 	Token          string
@@ -25,12 +27,27 @@ type Config struct {
 	Bots []BotConfig
 }
 
+var slugRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// validateSlug checks if a slug is URL-safe (lowercase alphanumeric with hyphens)
+func validateSlug(slug string) error {
+	if slug == "" {
+		return fmt.Errorf("slug cannot be empty")
+	}
+	if !slugRegex.MatchString(slug) {
+		return fmt.Errorf("slug must be lowercase alphanumeric with hyphens (e.g., 'alerts', 'my-bot-1')")
+	}
+	return nil
+}
+
 // Load reads bot configurations from environment variables
-// Supports multiple bots with pattern: BOTn_URL, BOTn_USER_ID, BOTn_TOKEN
+// Supports multiple bots with pattern: BOTn_URL, BOTn_USER_ID, BOTn_TOKEN, BOTn_SLUG
 func Load() (*Config, error) {
 	cfg := &Config{
 		Bots: make([]BotConfig, 0),
 	}
+
+	seenSlugs := make(map[string]string) // slug -> BOTn prefix
 
 	// Scan for bot configurations (BOT1, BOT2, BOT3, ...)
 	for i := 1; ; i++ {
@@ -42,6 +59,7 @@ func Load() (*Config, error) {
 			break
 		}
 
+		slug := os.Getenv(prefix + "SLUG")
 		userID := os.Getenv(prefix + "USER_ID")
 		token := os.Getenv(prefix + "TOKEN")
 		webhookURL := os.Getenv(prefix + "WEBHOOK_URL")
@@ -52,6 +70,17 @@ func Load() (*Config, error) {
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
 
 		// Validate required fields
+		if slug == "" {
+			return nil, fmt.Errorf("%sSLUG is required", prefix)
+		}
+		if err := validateSlug(slug); err != nil {
+			return nil, fmt.Errorf("%sSLUG invalid: %w", prefix, err)
+		}
+		if existingPrefix, exists := seenSlugs[slug]; exists {
+			return nil, fmt.Errorf("%sSLUG %q conflicts with %sSLUG (slugs must be unique)", prefix, slug, existingPrefix)
+		}
+		seenSlugs[slug] = prefix
+
 		if userID == "" {
 			return nil, fmt.Errorf("%sUSER_ID is required", prefix)
 		}
@@ -80,6 +109,7 @@ func Load() (*Config, error) {
 		}
 
 		cfg.Bots = append(cfg.Bots, BotConfig{
+			Slug:           slug,
 			URL:            url,
 			UserID:         userID,
 			Token:          token,
@@ -93,7 +123,7 @@ func Load() (*Config, error) {
 	}
 
 	if len(cfg.Bots) == 0 {
-		return nil, fmt.Errorf("no bots configured (expected BOT1_URL, BOT1_USER_ID, BOT1_TOKEN)")
+		return nil, fmt.Errorf("no bots configured (expected BOT1_URL, BOT1_USER_ID, BOT1_TOKEN, BOT1_SLUG)")
 	}
 
 	return cfg, nil

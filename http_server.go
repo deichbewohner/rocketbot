@@ -31,7 +31,7 @@ func (s *HTTPServer) Start(addr string) error {
 	mux := http.NewServeMux()
 
 	// Register routes
-	mux.HandleFunc("POST /api/v1/bots/{botName}/send", s.handleSend)
+	mux.HandleFunc("POST /api/v1/bots/{slug}/send", s.handleSend)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 
 	// Wrap with logging middleware only
@@ -83,13 +83,13 @@ func validateTarget(t Target) error {
 	return nil
 }
 
-// handleSend handles POST /api/v1/bots/{botName}/send
+// handleSend handles POST /api/v1/bots/{slug}/send
 func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	botName := r.PathValue("botName")
+	slug := r.PathValue("slug")
 
 	// Authenticate request
-	expectedToken, ok := s.tokens[botName]
+	expectedToken, ok := s.tokens[slug]
 	if !ok || expectedToken == "" {
 		s.writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
@@ -108,7 +108,7 @@ func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get bot client
-	client, ok := s.bots[botName]
+	client, ok := s.bots[slug]
 	if !ok {
 		s.writeError(w, http.StatusNotFound, "bot not found")
 		return
@@ -160,7 +160,7 @@ func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.InfoContext(ctx, "message sent via API", "bot", botName, "roomId", roomID)
+	s.logger.InfoContext(ctx, "message sent via API", "bot", slug, "roomId", roomID)
 	s.writeJSON(w, http.StatusOK, sendResponse{
 		Success: true,
 		RoomID:  roomID,

@@ -6,6 +6,7 @@ import (
 )
 
 func TestLoad_SingleBot(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "my-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
@@ -21,6 +22,9 @@ func TestLoad_SingleBot(t *testing.T) {
 	}
 
 	bot, _ := cfg.Get(0)
+	if bot.Slug != "my-bot" {
+		t.Errorf("Slug = %q, want %q", bot.Slug, "my-bot")
+	}
 	if bot.URL != "https://chat.example.com" {
 		t.Errorf("URL = %q, want %q", bot.URL, "https://chat.example.com")
 	}
@@ -33,14 +37,17 @@ func TestLoad_SingleBot(t *testing.T) {
 }
 
 func TestLoad_MultipleBots(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "alerts")
 	t.Setenv("BOT1_URL", "https://chat1.example.com")
 	t.Setenv("BOT1_USER_ID", "user1")
 	t.Setenv("BOT1_TOKEN", "token1")
 	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT2_SLUG", "notifications")
 	t.Setenv("BOT2_URL", "https://chat2.example.com")
 	t.Setenv("BOT2_USER_ID", "user2")
 	t.Setenv("BOT2_TOKEN", "token2")
 	t.Setenv("BOT2_PARSER_TYPE", "n8n")
+	t.Setenv("BOT3_SLUG", "support-bot")
 	t.Setenv("BOT3_URL", "https://chat3.example.com")
 	t.Setenv("BOT3_USER_ID", "user3")
 	t.Setenv("BOT3_TOKEN", "token3")
@@ -56,6 +63,9 @@ func TestLoad_MultipleBots(t *testing.T) {
 	}
 
 	bot2, _ := cfg.Get(1)
+	if bot2.Slug != "notifications" {
+		t.Errorf("Bot 2 Slug = %q, want %q", bot2.Slug, "notifications")
+	}
 	if bot2.UserID != "user2" {
 		t.Errorf("Bot 2 UserID = %q, want %q", bot2.UserID, "user2")
 	}
@@ -115,6 +125,7 @@ func TestLoad_BooleanFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BOT1_SLUG", "test-bot")
 			t.Setenv("BOT1_URL", "https://chat.example.com")
 			t.Setenv("BOT1_USER_ID", "user123")
 			t.Setenv("BOT1_TOKEN", "token456")
@@ -143,6 +154,7 @@ func TestLoad_BooleanFlags(t *testing.T) {
 }
 
 func TestLoad_URLProcessing(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com/")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
@@ -160,6 +172,7 @@ func TestLoad_URLProcessing(t *testing.T) {
 }
 
 func TestLoad_CustomParserType(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
@@ -177,6 +190,7 @@ func TestLoad_CustomParserType(t *testing.T) {
 }
 
 func TestLoad_WebhookConfig(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
@@ -205,8 +219,68 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		errContains string
 	}{
 		{
+			name: "missing_slug",
+			envVars: map[string]string{
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
+			errContains: "BOT1_SLUG is required",
+		},
+		{
+			name: "invalid_slug_uppercase",
+			envVars: map[string]string{
+				"BOT1_SLUG":        "MyBot",
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
+			errContains: "BOT1_SLUG invalid",
+		},
+		{
+			name: "invalid_slug_special_chars",
+			envVars: map[string]string{
+				"BOT1_SLUG":        "my_bot!",
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
+			errContains: "BOT1_SLUG invalid",
+		},
+		{
+			name: "invalid_slug_spaces",
+			envVars: map[string]string{
+				"BOT1_SLUG":        "my bot",
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
+			errContains: "BOT1_SLUG invalid",
+		},
+		{
+			name: "duplicate_slug",
+			envVars: map[string]string{
+				"BOT1_SLUG":        "alerts",
+				"BOT1_URL":         "https://chat1.example.com",
+				"BOT1_USER_ID":     "user1",
+				"BOT1_TOKEN":       "token1",
+				"BOT1_PARSER_TYPE": "n8n",
+				"BOT2_SLUG":        "alerts",
+				"BOT2_URL":         "https://chat2.example.com",
+				"BOT2_USER_ID":     "user2",
+				"BOT2_TOKEN":       "token2",
+				"BOT2_PARSER_TYPE": "n8n",
+			},
+			errContains: "conflicts",
+		},
+		{
 			name: "missing_user_id",
 			envVars: map[string]string{
+				"BOT1_SLUG":        "alerts",
 				"BOT1_URL":         "https://chat.example.com",
 				"BOT1_TOKEN":       "token456",
 				"BOT1_PARSER_TYPE": "n8n",
@@ -216,6 +290,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{
 			name: "missing_token",
 			envVars: map[string]string{
+				"BOT1_SLUG":        "alerts",
 				"BOT1_URL":         "https://chat.example.com",
 				"BOT1_USER_ID":     "user123",
 				"BOT1_PARSER_TYPE": "n8n",
@@ -225,6 +300,7 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{
 			name: "missing_parser_type",
 			envVars: map[string]string{
+				"BOT1_SLUG":    "alerts",
 				"BOT1_URL":     "https://chat.example.com",
 				"BOT1_USER_ID": "user123",
 				"BOT1_TOKEN":   "token456",
@@ -312,6 +388,40 @@ func TestConfig_BotName(t *testing.T) {
 			got := cfg.BotName(tt.index)
 			if got != tt.want {
 				t.Errorf("BotName(%d) = %q, want %q", tt.index, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_ValidSlugs(t *testing.T) {
+	tests := []struct {
+		name string
+		slug string
+	}{
+		{name: "simple", slug: "alerts"},
+		{name: "with_number", slug: "bot1"},
+		{name: "with_hyphen", slug: "my-bot"},
+		{name: "multiple_hyphens", slug: "my-support-bot-1"},
+		{name: "all_numbers", slug: "123"},
+		{name: "hyphen_and_numbers", slug: "bot-2024"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("BOT1_SLUG", tt.slug)
+			t.Setenv("BOT1_URL", "https://chat.example.com")
+			t.Setenv("BOT1_USER_ID", "user123")
+			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_PARSER_TYPE", "n8n")
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+
+			bot, _ := cfg.Get(0)
+			if bot.Slug != tt.slug {
+				t.Errorf("Slug = %q, want %q", bot.Slug, tt.slug)
 			}
 		})
 	}
