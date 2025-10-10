@@ -32,7 +32,7 @@ jobs:
 
       - name: Run tests
         run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
+          go test -race -coverprofile=coverage.out -covermode=atomic -coverpkg=./bot,./config,./internal/... ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
