@@ -1,9 +1,9 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo-dark.webp">
-  <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo-light.webp">
-  <img alt="rocketbot" src=".github/assets/logo-dark.webp" width="400">
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/logo.webp">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/logo.webp">
+  <img alt="rocketbot" src=".github/assets/logo.webp" width="400">
 </picture>
 
 **Experimental Rocket.Chat bot with streaming message support. Unmaintained.**
