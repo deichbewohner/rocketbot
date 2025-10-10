@@ -653,163 +653,183 @@ func TestAPIClient_FetchThreadHistory(t *testing.T) {
 	tests := []struct {
 		name      string
 		responses []*http.Response
-		wantCount int
-		wantNil   bool
-		validate  func(*testing.T, []bot.Message)
+		assert    func(*testing.T, []bot.Message)
 	}{
 		{
 			name: "success_with_starter_and_replies",
 			responses: []*http.Response{
-				// Call 1: FetchMessage for starter
-				{
-					StatusCode: http.StatusOK,
-					Body: io.NopCloser(bytes.NewReader([]byte(`{
-						"message": {
-							"_id": "thread-start",
-							"msg": "Thread starter",
-							"rid": "room1",
-							"ts": "1609459200000",
-							"u": {"_id": "user1", "username": "user1", "name": "User One"}
-						},
-						"success": true
-					}`))),
-					Header: make(http.Header),
-				},
-				// Call 2: getThreadMessages for replies
-				{
-					StatusCode: http.StatusOK,
-					Body: io.NopCloser(bytes.NewReader([]byte(`{
-						"messages": [
-							{"_id": "reply1", "msg": "First reply", "rid": "room1", "ts": "1609459300000", "u": {"_id": "user2", "username": "user2", "name": "User Two"}},
-							{"_id": "reply2", "msg": "Second reply", "rid": "room1", "ts": "1609459400000", "u": {"_id": "user3", "username": "user3", "name": "User Three"}}
-						],
-						"success": true
-					}`))),
-					Header: make(http.Header),
-				},
+				jsonResponse(http.StatusOK, `{
+					"message": {
+						"_id": "thread-start",
+						"msg": "Thread starter",
+						"rid": "room1",
+						"ts": "1609459200000",
+						"u": {"_id": "user1", "username": "user1", "name": "User One"}
+					},
+					"success": true
+				}`),
+				jsonResponse(http.StatusOK, `{
+					"messages": [
+						{"_id": "reply1", "msg": "First reply", "rid": "room1", "ts": "1609459300000", "u": {"_id": "user2", "username": "user2", "name": "User Two"}},
+						{"_id": "reply2", "msg": "Second reply", "rid": "room1", "ts": "1609459400000", "u": {"_id": "user3", "username": "user3", "name": "User Three"}}
+					],
+					"success": true
+				}`),
 			},
-			wantCount: 3, // starter + 2 replies
-			validate: func(t *testing.T, messages []bot.Message) {
-				t.Helper()
-				// Verify starter is first
-				if messages[0].ID != "thread-start" {
-					t.Errorf("first message ID = %q, want thread-start", messages[0].ID)
-				}
-				if messages[0].ThreadID != "" {
-					t.Errorf("starter ThreadID = %q, want empty", messages[0].ThreadID)
-				}
-
-				// Verify replies have ThreadID set
-				for i := 1; i < len(messages); i++ {
-					if messages[i].ThreadID != "thread-start" {
-						t.Errorf("reply[%d] ThreadID = %q, want thread-start", i-1, messages[i].ThreadID)
-					}
-				}
-
-				// Verify chronological order
-				for i := 1; i < len(messages); i++ {
-					if messages[i].Timestamp.Before(messages[i-1].Timestamp) {
-						t.Errorf("messages not in chronological order at index %d", i)
-					}
-				}
-			},
+			assert: assertThreadHistorySuccess,
 		},
 		{
 			name: "starter_fetch_fails",
 			responses: []*http.Response{
-				// Call 1: FetchMessage fails
-				{
-					StatusCode: http.StatusNotFound,
-					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
-					Header:     make(http.Header),
-				},
+				jsonResponse(http.StatusNotFound, `{}`),
 			},
-			wantNil: true,
+			assert: assertThreadHistoryNil,
 		},
 		{
 			name: "thread_replies_fetch_fails",
 			responses: []*http.Response{
-				// Call 1: FetchMessage for starter succeeds
-				{
-					StatusCode: http.StatusOK,
-					Body: io.NopCloser(bytes.NewReader([]byte(`{
-						"message": {
-							"_id": "thread-start",
-							"msg": "Thread starter",
-							"rid": "room1",
-							"ts": "1609459200000",
-							"u": {"_id": "user1", "username": "user1", "name": "User One"}
-						},
-						"success": true
-					}`))),
-					Header: make(http.Header),
-				},
-				// Call 2: getThreadMessages fails
-				{
-					StatusCode: http.StatusInternalServerError,
-					Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
-					Header:     make(http.Header),
-				},
+				jsonResponse(http.StatusOK, `{
+					"message": {
+						"_id": "thread-start",
+						"msg": "Thread starter",
+						"rid": "room1",
+						"ts": "1609459200000",
+						"u": {"_id": "user1", "username": "user1", "name": "User One"}
+					},
+					"success": true
+				}`),
+				jsonResponse(http.StatusInternalServerError, `{}`),
 			},
-			wantNil: true,
+			assert: assertThreadHistoryNil,
 		},
 		{
 			name: "empty_thread",
 			responses: []*http.Response{
-				// Call 1: FetchMessage for starter
-				{
-					StatusCode: http.StatusOK,
-					Body: io.NopCloser(bytes.NewReader([]byte(`{
-						"message": {
-							"_id": "thread-start",
-							"msg": "Thread starter",
-							"rid": "room1",
-							"ts": "1609459200000",
-							"u": {"_id": "user1", "username": "user1", "name": "User One"}
-						},
-						"success": true
-					}`))),
-					Header: make(http.Header),
-				},
-				// Call 2: getThreadMessages returns empty
-				{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader([]byte(`{"messages":[],"success":true}`))),
-					Header:     make(http.Header),
-				},
+				jsonResponse(http.StatusOK, `{
+					"message": {
+						"_id": "thread-start",
+						"msg": "Thread starter",
+						"rid": "room1",
+						"ts": "1609459200000",
+						"u": {"_id": "user1", "username": "user1", "name": "User One"}
+					},
+					"success": true
+				}`),
+				jsonResponse(http.StatusOK, `{"messages":[],"success":true}`),
 			},
-			wantCount: 1, // Just the starter
+			assert: assertThreadHistoryEmpty,
 		},
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
-			i := 0
-			roundTripper := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
-				resp := tt.responses[i]
-				i++
-				return resp, nil
-			})
+			t.Parallel()
 
-			client := &http.Client{Transport: roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
-
+			api := newThreadHistoryAPIClient(t, tt.responses)
 			messages := api.FetchThreadHistory(context.Background(), "thread-start", 10)
-
-			if tt.wantNil {
-				if messages != nil {
-					t.Errorf("FetchThreadHistory() = %+v, want nil", messages)
-				}
-				return
-			}
-
-			if len(messages) != tt.wantCount {
-				t.Errorf("FetchThreadHistory() returned %d messages, want %d", len(messages), tt.wantCount)
-			}
-
-			if tt.validate != nil {
-				tt.validate(t, messages)
-			}
+			tt.assert(t, messages)
 		})
+	}
+}
+
+func newThreadHistoryAPIClient(t *testing.T, responses []*http.Response) *bot.APIClient {
+	t.Helper()
+
+	var idx int
+	roundTripper := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if idx >= len(responses) {
+			t.Fatalf("unexpected request %d: %s %s", idx, r.Method, r.URL.String())
+		}
+
+		resp := responses[idx]
+		idx++
+		return resp, nil
+	})
+
+	client := &http.Client{Transport: roundTripper}
+	api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+
+	t.Cleanup(func() {
+		if idx != len(responses) {
+			t.Errorf("FetchThreadHistory() performed %d requests, want %d", idx, len(responses))
+		}
+	})
+
+	return api
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+func assertThreadHistorySuccess(t *testing.T, messages []bot.Message) {
+	t.Helper()
+
+	if messages == nil {
+		t.Fatal("FetchThreadHistory() = nil, want messages")
+	}
+	if len(messages) != 3 {
+		t.Fatalf("FetchThreadHistory() returned %d messages, want 3", len(messages))
+	}
+
+	assertStarterMessage(t, messages[0])
+	assertReplyThreadIDs(t, messages[1:], "thread-start")
+	assertChronological(t, messages)
+}
+
+func assertThreadHistoryNil(t *testing.T, messages []bot.Message) {
+	t.Helper()
+
+	if messages != nil {
+		t.Fatalf("FetchThreadHistory() = %+v, want nil", messages)
+	}
+}
+
+func assertThreadHistoryEmpty(t *testing.T, messages []bot.Message) {
+	t.Helper()
+
+	if messages == nil {
+		t.Fatal("FetchThreadHistory() = nil, want messages")
+	}
+	if len(messages) != 1 {
+		t.Fatalf("FetchThreadHistory() returned %d messages, want 1", len(messages))
+	}
+
+	assertStarterMessage(t, messages[0])
+}
+
+func assertStarterMessage(t *testing.T, message bot.Message) {
+	t.Helper()
+
+	if message.ID != "thread-start" {
+		t.Fatalf("starter ID = %q, want thread-start", message.ID)
+	}
+	if message.ThreadID != "" {
+		t.Fatalf("starter ThreadID = %q, want empty", message.ThreadID)
+	}
+}
+
+func assertReplyThreadIDs(t *testing.T, messages []bot.Message, threadID string) {
+	t.Helper()
+
+	for i, message := range messages {
+		if message.ThreadID != threadID {
+			t.Fatalf("reply[%d] ThreadID = %q, want %s", i, message.ThreadID, threadID)
+		}
+	}
+}
+
+func assertChronological(t *testing.T, messages []bot.Message) {
+	t.Helper()
+
+	for i := 1; i < len(messages); i++ {
+		if messages[i].Timestamp.Before(messages[i-1].Timestamp) {
+			t.Fatalf("messages not in chronological order at index %d", i)
+		}
 	}
 }
