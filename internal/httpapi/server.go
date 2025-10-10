@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/deichbewohner/rocketbot/bot"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Server serves the HTTP API for triggering bot messages
@@ -37,7 +38,14 @@ func (s *Server) Handler() http.Handler {
 // Start starts the HTTP server on the given address
 func (s *Server) Start(addr string) error {
 	s.logger.Info("HTTP API server starting", "addr", addr)
-	return http.ListenAndServe(addr, s.Handler())
+	handler := otelhttp.NewHandler(
+		s.Handler(),
+		"httpapi",
+		otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
+			return r.Method + " " + r.URL.Path
+		}),
+	)
+	return http.ListenAndServe(addr, handler)
 }
 
 // Target represents a structured message destination
