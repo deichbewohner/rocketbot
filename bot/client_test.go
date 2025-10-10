@@ -904,6 +904,480 @@ func TestClient_GenerateID(t *testing.T) {
 	}
 }
 
+type recordingGenerator struct {
+	response    string
+	err         error
+	lastMessage Message
+	lastHistory []Message
+}
+
+func (g *recordingGenerator) GenerateResponse(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (string, error) {
+	g.lastMessage = message
+	g.lastHistory = append([]Message(nil), history...)
+	return g.response, g.err
+}
+
+type recordingStreamingGenerator struct {
+	chunks         []string
+	lastMessage    Message
+	lastHistory    []Message
+	generateCalled bool
+}
+
+func (g *recordingStreamingGenerator) GenerateResponse(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (string, error) {
+	g.generateCalled = true
+	return "", nil
+}
+
+func (g *recordingStreamingGenerator) GenerateResponseStream(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (<-chan string, error) {
+	g.lastMessage = message
+	g.lastHistory = append([]Message(nil), history...)
+
+	ch := make(chan string)
+	go func() {
+		defer close(ch)
+		for _, chunk := range g.chunks {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- chunk:
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func TestClient_HandleDMResponse_NonStreaming(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	ws := testutil.NewMockWsConn()
+	gen := &recordingGenerator{response: "generated response"}
+
+	var historyCalled bool
+	var postPayload map[string]interface{}
+	var updatePayload map[string]interface{}
+	var updateCount int
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/im.history"):
+			historyCalled = true
+			resp := map[string]interface{}{
+				"messages": []map[string]interface{}{
+					{
+						"_id": "other-msg",
+						"msg": "previous message",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:00Z",
+						"u":   map[string]interface{}{"_id": "user2", "username": "user2", "name": "User Two"},
+					},
+					{
+						"_id": "current-msg",
+						"msg": "hello there",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:05Z",
+						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+					},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
+			var payload map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&payload)
+			postPayload = payload
+
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{"_id": "reply-msg-id"},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
+			var payload map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&payload)
+			updatePayload = payload
+			updateCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := &Client{
+		api:            apiClient,
+		generator:      gen,
+		logger:         logger,
+		streamedOutput: false,
+		pending:        make(map[string]string),
+		ws:             ws,
+		username:       "botuser",
+	}
+
+	message := Message{
+		ID:     "current-msg",
+		Text:   "hello there",
+		RoomID: "room123",
+		User: MessageUser{
+			ID:       "user1",
+			Username: "alice",
+			Name:     "Alice",
+		},
+	}
+
+	client.handleDMResponse(message)
+
+	if !historyCalled {
+		t.Fatal("expected FetchHistory to be called")
+	}
+	if postPayload == nil {
+		t.Fatal("expected PostMessage payload to be captured")
+	}
+	if updatePayload == nil {
+		t.Fatal("expected UpdateMessage payload to be captured")
+	}
+	if updateCount == 0 {
+		t.Fatal("expected at least one UpdateMessage call")
+	}
+
+	if postRoom, _ := postPayload["roomId"].(string); postRoom != "room123" {
+		t.Fatalf("post roomId = %q, want room123", postRoom)
+	}
+	if postText, _ := postPayload["text"].(string); postText != "..." {
+		t.Fatalf("post text = %q, want ...", postText)
+	}
+	if _, ok := postPayload["tmid"]; ok {
+		t.Fatal("expected no thread ID for DM response")
+	}
+
+	if updateRoom, _ := updatePayload["roomId"].(string); updateRoom != "room123" {
+		t.Fatalf("update roomId = %q, want room123", updateRoom)
+	}
+	if updateMsgID, _ := updatePayload["msgId"].(string); updateMsgID != "reply-msg-id" {
+		t.Fatalf("update msgId = %q, want reply-msg-id", updateMsgID)
+	}
+	if updateText, _ := updatePayload["text"].(string); updateText != "generated response" {
+		t.Fatalf("update text = %q, want generated response", updateText)
+	}
+
+	if gen.lastMessage.ID != message.ID {
+		t.Fatalf("generator received message %q, want %q", gen.lastMessage.ID, message.ID)
+	}
+	if len(gen.lastHistory) != 1 || gen.lastHistory[0].ID != "other-msg" {
+		t.Fatalf("generator history = %+v, want only other-msg", gen.lastHistory)
+	}
+
+	writes := ws.GetWrites()
+	if len(writes) != 2 {
+		t.Fatalf("expected 2 typing indicator writes, got %d", len(writes))
+	}
+
+	first, ok := writes[0].(ddpMessage)
+	if !ok {
+		t.Fatalf("unexpected first write type: %T", writes[0])
+	}
+	if first.Method != "stream-notify-room" {
+		t.Fatalf("first write method = %q, want stream-notify-room", first.Method)
+	}
+	if len(first.Params) != 3 {
+		t.Fatalf("first write params length = %d, want 3", len(first.Params))
+	}
+	if activities, ok := first.Params[2].([]string); !ok || len(activities) != 1 || activities[0] != "user-typing" {
+		t.Fatalf("first write activities = %#v, want [user-typing]", first.Params[2])
+	}
+
+	second, ok := writes[1].(ddpMessage)
+	if !ok {
+		t.Fatalf("unexpected second write type: %T", writes[1])
+	}
+	if activities, ok := second.Params[2].([]string); !ok || len(activities) != 0 {
+		t.Fatalf("second write activities = %#v, want empty slice", second.Params[2])
+	}
+}
+
+func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	ws := testutil.NewMockWsConn()
+	gen := &recordingGenerator{response: "thread response"}
+
+	var fetchMessageCalled bool
+	var threadMessagesCalled bool
+	var postPayload map[string]interface{}
+	var updatePayload map[string]interface{}
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/chat.getMessage"):
+			fetchMessageCalled = true
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{
+					"_id": "thread-root",
+					"msg": "root message",
+					"rid": "room123",
+					"ts":  "2024-01-01T00:00:00Z",
+					"u":   map[string]interface{}{"_id": "user-root", "username": "root", "name": "Root"},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.getThreadMessages"):
+			threadMessagesCalled = true
+			resp := map[string]interface{}{
+				"messages": []map[string]interface{}{
+					{
+						"_id": "other-reply",
+						"msg": "previous reply",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:05Z",
+						"u":   map[string]interface{}{"_id": "user2", "username": "bob", "name": "Bob"},
+					},
+					{
+						"_id": "current-msg",
+						"msg": "current reply",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:06Z",
+						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+					},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
+			var payload map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&payload)
+			postPayload = payload
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{"_id": "reply-msg-id"},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
+			var payload map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&payload)
+			updatePayload = payload
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := &Client{
+		api:            apiClient,
+		generator:      gen,
+		logger:         logger,
+		streamedOutput: false,
+		pending:        make(map[string]string),
+		ws:             ws,
+		username:       "botuser",
+	}
+
+	message := Message{
+		ID:       "current-msg",
+		Text:     "current reply",
+		RoomID:   "room123",
+		ThreadID: "thread-root",
+		User: MessageUser{
+			ID:       "user1",
+			Username: "alice",
+			Name:     "Alice",
+		},
+	}
+
+	client.handleDMResponse(message)
+
+	if !fetchMessageCalled {
+		t.Fatal("expected FetchMessage to be called for thread history")
+	}
+	if !threadMessagesCalled {
+		t.Fatal("expected chat.getThreadMessages to be invoked")
+	}
+	if postPayload == nil || updatePayload == nil {
+		t.Fatal("expected PostMessage and UpdateMessage to be called")
+	}
+
+	if len(gen.lastHistory) != 2 {
+		t.Fatalf("generator history length = %d, want 2", len(gen.lastHistory))
+	}
+	if gen.lastHistory[0].ID != "thread-root" {
+		t.Fatalf("first history message = %q, want thread-root", gen.lastHistory[0].ID)
+	}
+	if gen.lastHistory[1].ID != "other-reply" {
+		t.Fatalf("second history message = %q, want other-reply", gen.lastHistory[1].ID)
+	}
+
+	writes := ws.GetWrites()
+	if len(writes) != 2 {
+		t.Fatalf("expected 2 typing indicator writes, got %d", len(writes))
+	}
+
+	for i, w := range writes {
+		msg, ok := w.(ddpMessage)
+		if !ok {
+			t.Fatalf("write %d has unexpected type %T", i, w)
+		}
+		if msg.Method != "stream-notify-room" {
+			t.Fatalf("write %d method = %q, want stream-notify-room", i, msg.Method)
+		}
+	}
+}
+
+func TestClient_HandleDMResponse_Streaming(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	ws := testutil.NewMockWsConn()
+
+	gen := &recordingStreamingGenerator{
+		chunks: []string{"chunk1 ", "chunk2"},
+	}
+
+	var historyCalled bool
+	var postPayload map[string]interface{}
+	var updateCount int
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/im.history"):
+			historyCalled = true
+			resp := map[string]interface{}{
+				"messages": []map[string]interface{}{
+					{
+						"_id": "other-msg",
+						"msg": "previous message",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:00Z",
+						"u":   map[string]interface{}{"_id": "user2", "username": "user2", "name": "User Two"},
+					},
+					{
+						"_id": "current-msg",
+						"msg": "hello there",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:05Z",
+						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+					},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
+			var payload map[string]interface{}
+			json.NewDecoder(r.Body).Decode(&payload)
+			postPayload = payload
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{"_id": "reply-msg-id"},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
+			updateCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := &Client{
+		api:            apiClient,
+		generator:      gen,
+		logger:         logger,
+		streamedOutput: true,
+		pending:        make(map[string]string),
+		ws:             ws,
+		username:       "botuser",
+	}
+
+	message := Message{
+		ID:     "current-msg",
+		Text:   "hello there",
+		RoomID: "room123",
+		User: MessageUser{
+			ID:       "user1",
+			Username: "alice",
+			Name:     "Alice",
+		},
+	}
+
+	client.handleDMResponse(message)
+
+	if !historyCalled {
+		t.Fatal("expected FetchHistory to be called")
+	}
+	if postPayload == nil {
+		t.Fatal("expected PostMessage to be called")
+	}
+	if updateCount == 0 {
+		t.Fatal("expected at least one UpdateMessage call during streaming")
+	}
+	if gen.generateCalled {
+		t.Fatal("GenerateResponse should not be called in streaming mode")
+	}
+	if len(gen.lastHistory) != 1 || gen.lastHistory[0].ID != "other-msg" {
+		t.Fatalf("streaming generator history = %+v, want only other-msg", gen.lastHistory)
+	}
+
+	writes := ws.GetWrites()
+	if len(writes) != 2 {
+		t.Fatalf("expected 2 typing indicator writes, got %d", len(writes))
+	}
+}
+
 func TestClient_HandleNonStreamingResponse(t *testing.T) {
 	tests := []struct {
 		name           string
