@@ -253,3 +253,211 @@ func TestServer_BotWithoutAPIToken(t *testing.T) {
 		t.Errorf("error = %q, want to contain 'unauthorized'", resp["error"])
 	}
 }
+
+func TestServer_HandleSend_ValidationFailures(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	tests := []struct {
+		name       string
+		bots       map[string]*bot.Client
+		payload    map[string]any
+		wantStatus int
+		wantErr    string
+	}{
+		{
+			name:       "bot_not_found",
+			bots:       map[string]*bot.Client{},
+			payload:    map[string]any{"target": map[string]any{"roomId": "room123"}, "text": "hi"},
+			wantStatus: http.StatusNotFound,
+			wantErr:    "bot not found",
+		},
+		{
+			name: "text_required",
+			bots: map[string]*bot.Client{
+				"alerts": bot.NewClientWithAPI(
+					bot.NewAPIClient("https://test.local", "user", "token", &http.Client{Transport: testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+						t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
+						return nil, nil
+					})}, logger),
+					"BOT1", nil, false, false, logger, "",
+				),
+			},
+			payload:    map[string]any{"target": map[string]any{"roomId": "room123"}},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "text is required",
+		},
+		{
+			name: "invalid_target",
+			bots: map[string]*bot.Client{
+				"alerts": bot.NewClientWithAPI(
+					bot.NewAPIClient("https://test.local", "user", "token", &http.Client{Transport: testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+						t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
+						return nil, nil
+					})}, logger),
+					"BOT1", nil, false, false, logger, "",
+				),
+			},
+			payload: map[string]any{
+				"target": map[string]any{"username": "alice", "roomId": "room123"},
+				"text":   "hi",
+			},
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "only one",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httpapi.NewServer(tt.bots, map[string]string{"alerts": "secret"}, logger)
+			payloadBytes, _ := json.Marshal(tt.payload)
+
+			req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+			req.Header.Set("Authorization", "Bearer secret")
+			w := httptest.NewRecorder()
+
+			srv.Handler().ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+
+			var resp map[string]any
+			json.NewDecoder(w.Body).Decode(&resp)
+			if gotErr, _ := resp["error"].(string); !strings.Contains(gotErr, tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", gotErr, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	var ensureCalls, postCalls int
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/im.create"):
+			ensureCalls++
+			var payload map[string]string
+			json.NewDecoder(r.Body).Decode(&payload)
+			if payload["username"] != "alice" {
+				t.Fatalf("username = %q, want alice", payload["username"])
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"room":{"_id":"dm-room"},"success":true}`)),
+				Header:     make(http.Header),
+			}, nil
+
+		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
+			postCalls++
+			var payload map[string]any
+			json.NewDecoder(r.Body).Decode(&payload)
+			if payload["roomId"] != "dm-room" {
+				t.Fatalf("roomId = %q, want dm-room", payload["roomId"])
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"message":{"_id":"msg123"},"success":true}`)),
+				Header:     make(http.Header),
+			}, nil
+		default:
+			t.Fatalf("unexpected HTTP call: %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	botClient := bot.NewClientWithAPI(
+		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
+		"BOT1", nil, false, false, logger, "",
+	)
+	srv := httpapi.NewServer(map[string]*bot.Client{"alerts": botClient}, map[string]string{"alerts": "secret"}, logger)
+
+	payload := map[string]any{
+		"target": map[string]any{"username": "alice"},
+		"text":   "hello there",
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if ensureCalls != 1 || postCalls != 1 {
+		t.Fatalf("expected one ensure call and one post call, got ensure=%d post=%d", ensureCalls, postCalls)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["success"] != true {
+		t.Fatalf("success = %v, want true", resp["success"])
+	}
+	if resp["roomId"] != "dm-room" {
+		t.Fatalf("roomId = %v, want dm-room", resp["roomId"])
+	}
+}
+
+func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	var postCalls int
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if !strings.Contains(r.URL.Path, "/api/v1/chat.postMessage") {
+			t.Fatalf("unexpected HTTP call: %s", r.URL.Path)
+		}
+		postCalls++
+
+		var payload map[string]any
+		json.NewDecoder(r.Body).Decode(&payload)
+		if payload["roomId"] != "room123" {
+			t.Fatalf("roomId = %q, want room123", payload["roomId"])
+		}
+		if payload["text"] != "ping" {
+			t.Fatalf("text = %q, want ping", payload["text"])
+		}
+
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"message":{"_id":"msg456"},"success":true}`)),
+			Header:     make(http.Header),
+		}, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	botClient := bot.NewClientWithAPI(
+		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
+		"BOT1", nil, false, false, logger, "",
+	)
+	srv := httpapi.NewServer(map[string]*bot.Client{"alerts": botClient}, map[string]string{"alerts": "secret"}, logger)
+
+	payload := map[string]any{
+		"target": map[string]any{"roomId": "room123"},
+		"text":   "ping",
+	}
+	payloadBytes, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+	req.Header.Set("Authorization", "Bearer secret")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if postCalls != 1 {
+		t.Fatalf("postCalls = %d, want 1", postCalls)
+	}
+
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["roomId"] != "room123" {
+		t.Fatalf("roomId = %v, want room123", resp["roomId"])
+	}
+}
