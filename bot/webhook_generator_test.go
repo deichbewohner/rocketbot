@@ -244,6 +244,73 @@ func TestWebhookGenerator_ContextMetadata(t *testing.T) {
 	}
 }
 
+func TestWebhookGenerator_HistoryPayload(t *testing.T) {
+	var receivedPayload map[string]interface{}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Capture payload
+		if err := json.NewDecoder(r.Body).Decode(&receivedPayload); err != nil {
+			t.Errorf("failed to decode payload: %v", err)
+		}
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"type":"item","content":"response"}`+"\n")
+	}))
+	defer server.Close()
+
+	parser := bot.NewN8nParser(testutil.NewTestLogger(t))
+	generator := bot.NewWebhookGenerator(
+		server.URL,
+		"",
+		parser,
+		server.Client(),
+		testutil.NewTestLogger(t),
+	)
+
+	msg := bot.NewMessage(t).WithText("current message").WithID("msg-3").Build()
+	history := []bot.Message{
+		bot.NewMessage(t).WithID("msg-1").WithText("first message").WithRoomID("room-123").Build(),
+		bot.NewMessage(t).WithID("msg-2").WithText("second message").WithRoomID("room-123").Build(),
+	}
+
+	_, err := generator.GenerateResponse(context.Background(), msg, history)
+	if err != nil {
+		t.Fatalf("GenerateResponse() error = %v", err)
+	}
+
+	// Verify history array in payload
+	historyArray, ok := receivedPayload["history"].([]interface{})
+	if !ok {
+		t.Fatalf("history field missing or wrong type: %T", receivedPayload["history"])
+	}
+	if len(historyArray) != 2 {
+		t.Fatalf("history length = %d, want 2", len(historyArray))
+	}
+
+	// Check first history message
+	msg1, ok := historyArray[0].(map[string]interface{})
+	if !ok {
+		t.Fatalf("history[0] not a map: %T", historyArray[0])
+	}
+	if msg1["id"] != "msg-1" {
+		t.Errorf("history[0].id = %v, want msg-1", msg1["id"])
+	}
+	if msg1["text"] != "first message" {
+		t.Errorf("history[0].text = %v, want 'first message'", msg1["text"])
+	}
+
+	// Check second history message
+	msg2, ok := historyArray[1].(map[string]interface{})
+	if !ok {
+		t.Fatalf("history[1] not a map: %T", historyArray[1])
+	}
+	if msg2["id"] != "msg-2" {
+		t.Errorf("history[1].id = %v, want msg-2", msg2["id"])
+	}
+	if msg2["text"] != "second message" {
+		t.Errorf("history[1].text = %v, want 'second message'", msg2["text"])
+	}
+}
+
 func TestWebhookGenerator_ContextCancellation(t *testing.T) {
 	// Server that streams slowly
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
