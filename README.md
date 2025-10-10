@@ -16,16 +16,6 @@
 
 </div>
 
-## Security
-
-- Not internet-facing. Do not expose the HTTP API publicly.
-- Bind `API_ADDR` to `127.0.0.1` or a private interface and place behind
-  authenticated proxy.
-- Limit egress to only your Rocket.Chat host and configured webhook endpoints
-  using firewall or network policies (iptables/nftables, eBPF, or Kubernetes
-  NetworkPolicy).
-- See `SECURITY.md` for the pragmatic policy.
-
 ## Features
 
 - WebSocket-based Rocket.Chat client
@@ -47,6 +37,16 @@ vim .env
 ( set -a; . .env; set +a; go run . )
 ```
 
+## Security
+
+- Not internet-facing. Do not expose the HTTP API publicly.
+- Bind `API_ADDR` to `127.0.0.1` or a private interface and place behind
+  authenticated proxy.
+- Limit egress to only your Rocket.Chat host and configured webhook endpoints
+  using firewall or network policies (iptables/nftables, eBPF, or Kubernetes
+  NetworkPolicy).
+- See `SECURITY.md` for the pragmatic policy.
+
 ## HTTP API
 
 ```bash
@@ -66,3 +66,15 @@ Target must specify exactly one of:
 - `{"username": "alice"}` - Send DM to user
 - `{"channel": "general"}` - Post to channel (# optional)
 - `{"roomId": "ABC123"}` - Post to room ID
+
+## Parsers
+
+Built-in: n8n streaming webhooks. Implement `StreamParser` for other formats:
+
+```go
+type StreamParser interface {
+    Parse(ctx context.Context, body io.Reader) (<-chan StreamEvent, error)
+}
+```
+
+See `bot/n8n_parser.go` for reference.
