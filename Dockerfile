@@ -5,7 +5,7 @@ RUN go mod download
 COPY . .
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /rocketbot .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-w -s" -o /rocketbot ./cmd/rocketbot
 
 FROM alpine:3.22 AS userbase
 RUN apk --no-cache add ca-certificates && \

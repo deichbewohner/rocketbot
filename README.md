@@ -34,7 +34,7 @@ cp .env.example .env
 vim .env
 
 # Run
-( set -a; . .env; set +a; go run . )
+( set -a; . .env; set +a; go run ./cmd/rocketbot )
 ```
 
 ## Security

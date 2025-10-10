@@ -32,9 +32,7 @@ jobs:
 
       - name: Run tests
         run: |
-          PKGS=$(go list ./... | grep -vE '/testutil($|/)' | tr '\n' ',')
-          PKGS=${PKGS%,}
-          go test -race -coverprofile=coverage.out -covermode=atomic -coverpkg="$PKGS" ./...
+          go test -race -coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -59,7 +57,7 @@ jobs:
           cache: true
 
       - name: Build binary
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o rocketbot .
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o rocketbot ./cmd/rocketbot
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4

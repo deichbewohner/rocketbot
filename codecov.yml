@@ -16,6 +16,8 @@ ignore:
   - "**/testutil/**/*"        # Exclude testutil packages at any depth
   - "**/testfixtures.go"      # Exclude test fixture builders
   - "**/testdata/**/*"        # Exclude test data directories
+  - "**/main.go"              # Exclude bootstrap files in module root
+  - "cmd/**/main.go"          # Exclude future command mains
 
 comment:
   layout: "reach,diff,flags,tree"

@@ -13,6 +13,7 @@ import (
 
 	"github.com/deichbewohner/rocketbot/bot"
 	"github.com/deichbewohner/rocketbot/config"
+	"github.com/deichbewohner/rocketbot/internal/httpapi"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -218,7 +219,7 @@ func main() {
 
 		if len(botMap) > 0 {
 			// Create and start HTTP server in goroutine
-			httpSrv := NewHTTPServer(botMap, tokenMap, logger)
+			httpSrv := httpapi.NewServer(botMap, tokenMap, logger)
 			go func() {
 				if err := httpSrv.Start(apiAddr); err != nil && err != http.ErrServerClosed {
 					logger.Error("HTTP server failed", "error", err)

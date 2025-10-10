@@ -1,8 +1,8 @@
-package main
+package httpapi
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -10,35 +10,34 @@ import (
 	"github.com/deichbewohner/rocketbot/bot"
 )
 
-// HTTPServer serves HTTP API for triggering bot messages
-type HTTPServer struct {
+// Server serves the HTTP API for triggering bot messages
+type Server struct {
 	bots   map[string]*bot.Client
 	tokens map[string]string
 	logger *slog.Logger
 }
 
-// NewHTTPServer creates a new HTTP server for bot API
-func NewHTTPServer(bots map[string]*bot.Client, tokens map[string]string, logger *slog.Logger) *HTTPServer {
-	return &HTTPServer{
+// NewServer creates a new HTTP API server
+func NewServer(bots map[string]*bot.Client, tokens map[string]string, logger *slog.Logger) *Server {
+	return &Server{
 		bots:   bots,
 		tokens: tokens,
 		logger: logger,
 	}
 }
 
-// Start starts the HTTP server on the given address
-func (s *HTTPServer) Start(addr string) error {
+// Handler constructs the HTTP handler with routes and middleware
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-
-	// Register routes
 	mux.HandleFunc("POST /api/v1/bots/{slug}/send", s.handleSend)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
+	return s.loggingMiddleware(mux)
+}
 
-	// Wrap with logging middleware only
-	handler := s.loggingMiddleware(mux)
-
+// Start starts the HTTP server on the given address
+func (s *Server) Start(addr string) error {
 	s.logger.Info("HTTP API server starting", "addr", addr)
-	return http.ListenAndServe(addr, handler)
+	return http.ListenAndServe(addr, s.Handler())
 }
 
 // Target represents a structured message destination
@@ -75,16 +74,16 @@ func validateTarget(t Target) error {
 	}
 
 	if set == 0 {
-		return fmt.Errorf("target must specify username, channel, or roomId")
+		return errors.New("target must specify username, channel, or roomId")
 	}
 	if set > 1 {
-		return fmt.Errorf("target must specify only one of username, channel, or roomId")
+		return errors.New("target must specify only one of username, channel, or roomId")
 	}
 	return nil
 }
 
 // handleSend handles POST /api/v1/bots/{slug}/send
-func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	slug := r.PathValue("slug")
 
@@ -168,14 +167,14 @@ func (s *HTTPServer) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleHealth handles GET /api/v1/health
-func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]string{
 		"status": "ok",
 	})
 }
 
 // loggingMiddleware logs HTTP requests
-func (s *HTTPServer) loggingMiddleware(next http.Handler) http.Handler {
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s.logger.Debug("HTTP request", "method", r.Method, "path", r.URL.Path)
 		next.ServeHTTP(w, r)
@@ -183,16 +182,18 @@ func (s *HTTPServer) loggingMiddleware(next http.Handler) http.Handler {
 }
 
 // writeJSON writes a JSON response
-func (s *HTTPServer) writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func (s *Server) writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
 // writeError writes an error response
-func (s *HTTPServer) writeError(w http.ResponseWriter, status int, message string) {
+func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	s.writeJSON(w, status, sendResponse{
 		Success: false,
 		Error:   message,
 	})
 }
+
+// no additional helpers
