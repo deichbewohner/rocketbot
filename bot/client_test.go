@@ -28,7 +28,10 @@ func TestParseMessage_TimestampVariants(t *testing.T) {
 		{name: "int_millis", dateField: int(ms)},
 		{name: "string_millis", dateField: fmt.Sprintf("%d", ms)},
 		{name: "rfc3339", dateField: "2021-01-01T00:00:00Z"},
-		{name: "numberLong", dateField: map[string]interface{}{"$numberLong": fmt.Sprintf("%d", ms)}},
+		{
+			name:      "numberLong",
+			dateField: map[string]interface{}{"$numberLong": fmt.Sprintf("%d", ms)},
+		},
 	}
 
 	for _, tc := range cases {
@@ -52,7 +55,8 @@ func TestParseMessage_TimestampVariants(t *testing.T) {
 			if got.RoomID != "ROOMID" || got.Text != "hello" || got.ID != "MSGID" {
 				t.Fatalf("unexpected basic fields: %+v", got)
 			}
-			if got.User.ID != "USERID" || got.User.Username != "user" || got.User.Name != "User Name" {
+			if got.User.ID != "USERID" || got.User.Username != "user" ||
+				got.User.Name != "User Name" {
 				t.Fatalf("unexpected user fields: %+v", got.User)
 			}
 			if !got.Timestamp.Equal(expected) {
@@ -186,7 +190,12 @@ func TestParseDDPDate_AllFormats(t *testing.T) {
 		{name: "int", input: int(ms), wantTime: expected, wantValid: true},
 		{name: "string_numeric", input: fmt.Sprintf("%d", ms), wantTime: expected, wantValid: true},
 		{name: "rfc3339", input: "2021-01-01T00:00:00Z", wantTime: expected, wantValid: true},
-		{name: "rfc3339nano", input: "2021-01-01T00:00:00.000000000Z", wantTime: expected, wantValid: true},
+		{
+			name:      "rfc3339nano",
+			input:     "2021-01-01T00:00:00.000000000Z",
+			wantTime:  expected,
+			wantValid: true,
+		},
 		{
 			name:      "numberLong",
 			input:     map[string]interface{}{"$numberLong": fmt.Sprintf("%d", ms)},
@@ -194,7 +203,12 @@ func TestParseDDPDate_AllFormats(t *testing.T) {
 			wantValid: true,
 		},
 		{name: "invalid_string", input: "not a date", wantTime: time.Time{}, wantValid: false},
-		{name: "invalid_map", input: map[string]interface{}{"foo": "bar"}, wantTime: time.Time{}, wantValid: false},
+		{
+			name:      "invalid_map",
+			input:     map[string]interface{}{"foo": "bar"},
+			wantTime:  time.Time{},
+			wantValid: false,
+		},
 		{name: "nil", input: nil, wantTime: time.Time{}, wantValid: false},
 		{name: "bool", input: true, wantTime: time.Time{}, wantValid: false},
 	}
@@ -302,9 +316,19 @@ func TestParseAPIMessages_Ordering(t *testing.T) {
 		} `json:"u"`
 	}{
 		// Out of order input
-		{ID: "msg2", Msg: "Second", Rid: "room1", Ts: fmt.Sprintf("%d", now.Add(1*time.Second).UnixMilli())},
+		{
+			ID:  "msg2",
+			Msg: "Second",
+			Rid: "room1",
+			Ts:  fmt.Sprintf("%d", now.Add(1*time.Second).UnixMilli()),
+		},
 		{ID: "msg1", Msg: "First", Rid: "room1", Ts: fmt.Sprintf("%d", now.UnixMilli())},
-		{ID: "msg3", Msg: "Third", Rid: "room1", Ts: fmt.Sprintf("%d", now.Add(2*time.Second).UnixMilli())},
+		{
+			ID:  "msg3",
+			Msg: "Third",
+			Rid: "room1",
+			Ts:  fmt.Sprintf("%d", now.Add(2*time.Second).UnixMilli()),
+		},
 	}
 
 	// Set user data
@@ -347,7 +371,11 @@ type mockResponseGenerator struct {
 	err      error
 }
 
-func (m *mockResponseGenerator) GenerateResponse(ctx context.Context, message Message, history []Message) (string, error) {
+func (m *mockResponseGenerator) GenerateResponse(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (string, error) {
 	return m.response, m.err
 }
 
@@ -723,7 +751,8 @@ func TestClient_HandleUserNotification(t *testing.T) {
 				writes := mockWs.GetWrites()
 				foundSub := false
 				for _, w := range writes {
-					if msg, ok := w.(ddpMessage); ok && msg.Msg == "sub" && msg.Name == "stream-room-messages" {
+					if msg, ok := w.(ddpMessage); ok && msg.Msg == "sub" &&
+						msg.Name == "stream-room-messages" {
 						foundSub = true
 						break
 					}
@@ -980,14 +1009,22 @@ func TestClient_HandleDMResponse_NonStreaming(t *testing.T) {
 						"msg": "previous message",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:00Z",
-						"u":   map[string]interface{}{"_id": "user2", "username": "user2", "name": "User Two"},
+						"u": map[string]interface{}{
+							"_id":      "user2",
+							"username": "user2",
+							"name":     "User Two",
+						},
 					},
 					{
 						"_id": "current-msg",
 						"msg": "hello there",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:05Z",
-						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+						"u": map[string]interface{}{
+							"_id":      "user1",
+							"username": "alice",
+							"name":     "Alice",
+						},
 					},
 				},
 				"success": true,
@@ -1107,7 +1144,8 @@ func TestClient_HandleDMResponse_NonStreaming(t *testing.T) {
 	if len(first.Params) != 3 {
 		t.Fatalf("first write params length = %d, want 3", len(first.Params))
 	}
-	if activities, ok := first.Params[2].([]string); !ok || len(activities) != 1 || activities[0] != "user-typing" {
+	if activities, ok := first.Params[2].([]string); !ok || len(activities) != 1 ||
+		activities[0] != "user-typing" {
 		t.Fatalf("first write activities = %#v, want [user-typing]", first.Params[2])
 	}
 
@@ -1140,7 +1178,11 @@ func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
 					"msg": "root message",
 					"rid": "room123",
 					"ts":  "2024-01-01T00:00:00Z",
-					"u":   map[string]interface{}{"_id": "user-root", "username": "root", "name": "Root"},
+					"u": map[string]interface{}{
+						"_id":      "user-root",
+						"username": "root",
+						"name":     "Root",
+					},
 				},
 				"success": true,
 			}
@@ -1158,14 +1200,22 @@ func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
 						"msg": "previous reply",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:05Z",
-						"u":   map[string]interface{}{"_id": "user2", "username": "bob", "name": "Bob"},
+						"u": map[string]interface{}{
+							"_id":      "user2",
+							"username": "bob",
+							"name":     "Bob",
+						},
 					},
 					{
 						"_id": "current-msg",
 						"msg": "current reply",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:06Z",
-						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+						"u": map[string]interface{}{
+							"_id":      "user1",
+							"username": "alice",
+							"name":     "Alice",
+						},
 					},
 				},
 				"success": true,
@@ -1288,14 +1338,22 @@ func TestClient_HandleDMResponse_Streaming(t *testing.T) {
 						"msg": "previous message",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:00Z",
-						"u":   map[string]interface{}{"_id": "user2", "username": "user2", "name": "User Two"},
+						"u": map[string]interface{}{
+							"_id":      "user2",
+							"username": "user2",
+							"name":     "User Two",
+						},
 					},
 					{
 						"_id": "current-msg",
 						"msg": "hello there",
 						"rid": "room123",
 						"ts":  "2024-01-01T00:00:05Z",
-						"u":   map[string]interface{}{"_id": "user1", "username": "alice", "name": "Alice"},
+						"u": map[string]interface{}{
+							"_id":      "user1",
+							"username": "alice",
+							"name":     "Alice",
+						},
 					},
 				},
 				"success": true,
@@ -1490,7 +1548,10 @@ func TestClient_HandleNonStreamingResponse(t *testing.T) {
 						Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
 					}, nil
 				}
-				return &http.Response{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte("")))}, nil
+				return &http.Response{
+					StatusCode: 404,
+					Body:       io.NopCloser(bytes.NewReader([]byte(""))),
+				}, nil
 			})
 
 			logger := testutil.NewTestLogger(t)
@@ -1606,7 +1667,10 @@ func TestClient_HandleStreamingResponse(t *testing.T) {
 						Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
 					}, nil
 				}
-				return &http.Response{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte("")))}, nil
+				return &http.Response{
+					StatusCode: 404,
+					Body:       io.NopCloser(bytes.NewReader([]byte(""))),
+				}, nil
 			})
 
 			logger := testutil.NewTestLogger(t)
@@ -1644,11 +1708,19 @@ type mockStreamingGenerator struct {
 	err    error
 }
 
-func (m *mockStreamingGenerator) GenerateResponse(ctx context.Context, message Message, history []Message) (string, error) {
+func (m *mockStreamingGenerator) GenerateResponse(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (string, error) {
 	return strings.Join(m.chunks, ""), m.err
 }
 
-func (m *mockStreamingGenerator) GenerateResponseStream(ctx context.Context, message Message, history []Message) (<-chan string, error) {
+func (m *mockStreamingGenerator) GenerateResponseStream(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (<-chan string, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -1738,9 +1810,23 @@ func TestClient_Start(t *testing.T) {
 	}
 
 	httpClient := &http.Client{Transport: transport}
-	apiClient := NewAPIClient("https://test.example.com", "user-123", "token-456", httpClient, logger)
+	apiClient := NewAPIClient(
+		"https://test.example.com",
+		"user-123",
+		"token-456",
+		httpClient,
+		logger,
+	)
 
-	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{response: "test"}, false, false, logger, "online")
+	client := NewClientWithAPI(
+		apiClient,
+		"TestBot",
+		&mockResponseGenerator{response: "test"},
+		false,
+		false,
+		logger,
+		"online",
+	)
 	client.wsDialer = mockDialer
 
 	err := client.Start()
@@ -1817,7 +1903,15 @@ func TestClient_Start_FetchUsernameError(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
 
-	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+	client := NewClientWithAPI(
+		apiClient,
+		"TestBot",
+		&mockResponseGenerator{},
+		false,
+		false,
+		logger,
+		"",
+	)
 
 	err := client.Start()
 	if err == nil {
@@ -1854,14 +1948,25 @@ func TestClient_Start_SetStatusError(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
 
-	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+	client := NewClientWithAPI(
+		apiClient,
+		"TestBot",
+		&mockResponseGenerator{},
+		false,
+		false,
+		logger,
+		"",
+	)
 
 	err := client.Start()
 	if err == nil {
 		t.Fatal("expected error when SetStatusOnline fails")
 	}
 	if !strings.Contains(err.Error(), "failed to set status online") {
-		t.Errorf("error message = %q, want it to contain 'failed to set status online'", err.Error())
+		t.Errorf(
+			"error message = %q, want it to contain 'failed to set status online'",
+			err.Error(),
+		)
 	}
 }
 
@@ -1896,14 +2001,25 @@ func TestClient_Start_GetSubscriptionsError(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
 
-	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+	client := NewClientWithAPI(
+		apiClient,
+		"TestBot",
+		&mockResponseGenerator{},
+		false,
+		false,
+		logger,
+		"",
+	)
 
 	err := client.Start()
 	if err == nil {
 		t.Fatal("expected error when GetSubscriptions fails")
 	}
 	if !strings.Contains(err.Error(), "failed to get subscriptions") {
-		t.Errorf("error message = %q, want it to contain 'failed to get subscriptions'", err.Error())
+		t.Errorf(
+			"error message = %q, want it to contain 'failed to get subscriptions'",
+			err.Error(),
+		)
 	}
 }
 
@@ -1948,7 +2064,15 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
 
-	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+	client := NewClientWithAPI(
+		apiClient,
+		"TestBot",
+		&mockResponseGenerator{},
+		false,
+		false,
+		logger,
+		"",
+	)
 	client.wsDialer = mockDialer
 
 	err := client.Start()
@@ -1956,7 +2080,10 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 		t.Fatal("expected error when WebSocket dial fails")
 	}
 	if !strings.Contains(err.Error(), "failed to connect to WebSocket") {
-		t.Errorf("error message = %q, want it to contain 'failed to connect to WebSocket'", err.Error())
+		t.Errorf(
+			"error message = %q, want it to contain 'failed to connect to WebSocket'",
+			err.Error(),
+		)
 	}
 }
 
@@ -1965,9 +2092,9 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 	mockWs := testutil.NewMockWsConn()
 
 	tests := []struct {
-		name        string
-		baseURL     string
-		expectedWS  string
+		name       string
+		baseURL    string
+		expectedWS string
 	}{
 		{
 			name:       "https_to_wss",
@@ -1988,13 +2115,25 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 				case strings.Contains(r.URL.Path, "/api/v1/me"):
 					resp := map[string]interface{}{"username": "testbot", "success": true}
 					body, _ := json.Marshal(resp)
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
 				case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"success":true}`)))}, nil
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+					}, nil
 				case strings.Contains(r.URL.Path, "/api/v1/subscriptions.get"):
-					resp := map[string]interface{}{"update": []map[string]interface{}{}, "success": true}
+					resp := map[string]interface{}{
+						"update":  []map[string]interface{}{},
+						"success": true,
+					}
 					body, _ := json.Marshal(resp)
-					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(body)),
+					}, nil
 				default:
 					t.Fatalf("unexpected request path: %s", r.URL.Path)
 				}
@@ -2005,7 +2144,15 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 			httpClient := &http.Client{Transport: transport}
 			apiClient := NewAPIClient(tt.baseURL, "user", "token", httpClient, logger)
 
-			client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+			client := NewClientWithAPI(
+				apiClient,
+				"TestBot",
+				&mockResponseGenerator{},
+				false,
+				false,
+				logger,
+				"",
+			)
 			client.wsDialer = mockDialer
 
 			err := client.Start()
