@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -460,18 +461,30 @@ func TestHTTPServer_WriteError(t *testing.T) {
 
 // Test that multiple bots can be configured
 func TestHTTPServer_MultipleBots(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	mockRT := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("{}")),
+			Header:     make(http.Header),
+		}, nil
+	})
+	mockHTTPClient := &http.Client{Transport: mockRT}
+
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
-			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
-				nil, false, false, testutil.NewTestLogger(t), ""),
-			"notifications": bot.NewClient("https://chat2.local", "user2", "token2", "BOT2",
-				nil, false, false, testutil.NewTestLogger(t), ""),
+			"alerts": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger),
+				"BOT1", nil, false, false, logger, ""),
+			"notifications": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat2.local", "user2", "token2", mockHTTPClient, logger),
+				"BOT2", nil, false, false, logger, ""),
 		},
 		tokens: map[string]string{
 			"alerts":        "secret1",
 			"notifications": "secret2",
 		},
-		logger: testutil.NewTestLogger(t),
+		logger: logger,
 	}
 
 	// Test that alerts token doesn't work for notifications
@@ -505,18 +518,29 @@ func TestHTTPServer_MultipleBots(t *testing.T) {
 
 // Test that bots without API tokens are not accessible via HTTP API
 func TestHTTPServer_BotWithoutAPIToken(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	mockRT := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("{}")),
+			Header:     make(http.Header),
+		}, nil
+	})
+	mockHTTPClient := &http.Client{Transport: mockRT}
+
 	// support-bot is created but deliberately not added to the server (simulating no API token)
 	server := &HTTPServer{
 		bots: map[string]*bot.Client{
-			"alerts": bot.NewClient("https://chat1.local", "user1", "token1", "BOT1",
-				nil, false, false, testutil.NewTestLogger(t), ""),
+			"alerts": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger),
+				"BOT1", nil, false, false, logger, ""),
 			// support-bot intentionally not in the map
 		},
 		tokens: map[string]string{
 			"alerts": "secret1",
 			// support-bot has no token configured
 		},
-		logger: testutil.NewTestLogger(t),
+		logger: logger,
 	}
 
 	payload := map[string]interface{}{"target": map[string]string{"username": "alice"}, "text": "Hello"}

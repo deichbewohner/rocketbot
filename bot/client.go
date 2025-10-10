@@ -48,8 +48,23 @@ func NewClient(
 	logger *slog.Logger,
 	statusMessage string,
 ) *Client {
+	api := NewAPIClient(baseURL, userID, token, nil, logger)
+	return NewClientWithAPI(api, name, generator, streamedOutput, threadDefault, logger, statusMessage)
+}
+
+// NewClientWithAPI creates a Client with a pre-configured APIClient.
+// This constructor is primarily for testing, allowing injection of mocked HTTP clients.
+func NewClientWithAPI(
+	api *APIClient,
+	name string,
+	generator ResponseGenerator,
+	streamedOutput bool,
+	threadDefault bool,
+	logger *slog.Logger,
+	statusMessage string,
+) *Client {
 	return &Client{
-		api:            NewAPIClient(baseURL, userID, token, nil, logger),
+		api:            api,
 		name:           name,
 		generator:      generator,
 		logger:         logger,
