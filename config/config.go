@@ -10,17 +10,17 @@ import (
 
 // BotConfig holds configuration for a single bot instance
 type BotConfig struct {
-	Slug          string // URL-safe identifier used in HTTP API endpoints
-	URL           string
-	UserID        string
-	Token         string
-	WebhookURL    string
-	WebhookAuth   string
+	Slug           string // URL-safe identifier used in HTTP API endpoints
+	URL            string
+	UserID         string
+	Token          string
+	WebhookURL     string
+	WebhookAuth    string
 	StreamedOutput bool
-	ParserType    string // Stream parser type (e.g., "n8n", "sse", "openai")
-	APIToken      string // HTTP API authentication token
-	ThreadDefault bool   // Always reply in threads (default: false)
-	StatusMessage string // Custom status message (optional, defaults to "Bot is active")
+	ParserType     string // Stream parser type (e.g., "n8n", "sse", "openai")
+	APIToken       string // HTTP API authentication token
+	ThreadDefault  bool   // Always reply in threads (default: false)
+	StatusMessage  string // Custom status message (optional, defaults to "Bot is active")
 }
 
 // Config holds all bot configurations
@@ -36,7 +36,9 @@ func validateSlug(slug string) error {
 		return fmt.Errorf("slug cannot be empty")
 	}
 	if !slugRegex.MatchString(slug) {
-		return fmt.Errorf("slug must be lowercase alphanumeric with hyphens (e.g., 'alerts', 'my-bot-1')")
+		return fmt.Errorf(
+			"slug must be lowercase alphanumeric with hyphens (e.g., 'alerts', 'my-bot-1')",
+		)
 	}
 	return nil
 }
@@ -79,7 +81,12 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("%sSLUG invalid: %w", prefix, err)
 		}
 		if existingPrefix, exists := seenSlugs[slug]; exists {
-			return nil, fmt.Errorf("%sSLUG %q conflicts with %sSLUG (slugs must be unique)", prefix, slug, existingPrefix)
+			return nil, fmt.Errorf(
+				"%sSLUG %q conflicts with %sSLUG (slugs must be unique)",
+				prefix,
+				slug,
+				existingPrefix,
+			)
 		}
 		seenSlugs[slug] = prefix
 
@@ -126,7 +133,9 @@ func Load() (*Config, error) {
 	}
 
 	if len(cfg.Bots) == 0 {
-		return nil, fmt.Errorf("no bots configured (expected BOT1_URL, BOT1_USER_ID, BOT1_TOKEN, BOT1_SLUG)")
+		return nil, fmt.Errorf(
+			"no bots configured (expected BOT1_URL, BOT1_USER_ID, BOT1_TOKEN, BOT1_SLUG)",
+		)
 	}
 
 	return cfg, nil

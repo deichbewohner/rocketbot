@@ -167,7 +167,11 @@ func TestLoad_URLProcessing(t *testing.T) {
 
 	bot, _ := cfg.Get(0)
 	if bot.URL != "https://chat.example.com" {
-		t.Errorf("URL = %q, want %q (trailing slash should be removed)", bot.URL, "https://chat.example.com")
+		t.Errorf(
+			"URL = %q, want %q (trailing slash should be removed)",
+			bot.URL,
+			"https://chat.example.com",
+		)
 	}
 }
 
@@ -395,9 +399,9 @@ func TestConfig_BotName(t *testing.T) {
 
 func TestLoad_StatusMessage(t *testing.T) {
 	tests := []struct {
-		name               string
-		statusMessage      string // empty = not set
-		wantStatusMessage  string
+		name              string
+		statusMessage     string // empty = not set
+		wantStatusMessage string
 	}{
 		{
 			name:              "status_message_not_set",
