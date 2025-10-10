@@ -20,6 +20,21 @@ type wsConn interface {
 	Close() error
 }
 
+// wsDialer abstracts WebSocket dialing for testing
+type wsDialer interface {
+	Dial(urlStr string, requestHeader map[string][]string) (wsConn, error)
+}
+
+// defaultWSDialer adapts websocket.Dialer to wsDialer interface
+type defaultWSDialer struct {
+	dialer *websocket.Dialer
+}
+
+func (d *defaultWSDialer) Dial(urlStr string, requestHeader map[string][]string) (wsConn, error) {
+	conn, _, err := d.dialer.Dial(urlStr, requestHeader)
+	return conn, err
+}
+
 // Client represents a Rocket.Chat bot client
 type Client struct {
 	api            *APIClient
@@ -32,6 +47,7 @@ type Client struct {
 	statusMessage  string
 
 	ws       wsConn
+	wsDialer wsDialer
 	wsMu     sync.Mutex
 	pending  map[string]string
 	rooms    map[string]bool
@@ -71,6 +87,7 @@ func NewClientWithAPI(
 		streamedOutput: streamedOutput,
 		threadDefault:  threadDefault,
 		statusMessage:  statusMessage,
+		wsDialer:       &defaultWSDialer{dialer: websocket.DefaultDialer},
 		pending:        make(map[string]string),
 		rooms:          make(map[string]bool),
 		dmRooms:        make(map[string]bool),
@@ -126,7 +143,7 @@ func (c *Client) Start() error {
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	wsURL += "/websocket"
 
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	ws, err := c.wsDialer.Dial(wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}

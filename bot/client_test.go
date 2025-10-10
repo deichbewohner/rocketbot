@@ -1665,3 +1665,357 @@ func (m *mockStreamingGenerator) GenerateResponseStream(ctx context.Context, mes
 	}()
 	return ch, nil
 }
+
+// mockWSDialer is a mock WebSocket dialer for testing Start()
+type mockWSDialer struct {
+	conn      wsConn
+	err       error
+	dialedURL string
+}
+
+func (m *mockWSDialer) Dial(urlStr string, requestHeader map[string][]string) (wsConn, error) {
+	m.dialedURL = urlStr
+	if m.err != nil {
+		return nil, m.err
+	}
+	return m.conn, nil
+}
+
+func TestClient_Start(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	mockWs := testutil.NewMockWsConn()
+
+	// Track API calls in order
+	var usernameCalled, statusCalled, subscriptionsCalled bool
+
+	// Mock HTTP API calls (same pattern as handleDMResponse tests)
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/me"):
+			usernameCalled = true
+			resp := map[string]interface{}{
+				"username": "testbot",
+				"success":  true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+
+		case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
+			statusCalled = true
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+
+		case strings.Contains(r.URL.Path, "/api/v1/subscriptions.get"):
+			subscriptionsCalled = true
+			resp := map[string]interface{}{
+				"update": []map[string]interface{}{
+					{"rid": "room1", "t": "c"},
+					{"rid": "dm1", "t": "d"},
+					{"rid": "dm2", "t": "d"},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	// Mock WebSocket dialer
+	mockDialer := &mockWSDialer{
+		conn: mockWs,
+	}
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.example.com", "user-123", "token-456", httpClient, logger)
+
+	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{response: "test"}, false, false, logger, "online")
+	client.wsDialer = mockDialer
+
+	err := client.Start()
+	if err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+
+	// Verify API orchestration sequence
+	if !usernameCalled {
+		t.Error("expected FetchUsername to be called")
+	}
+	if !statusCalled {
+		t.Error("expected SetStatusOnline to be called")
+	}
+	if !subscriptionsCalled {
+		t.Error("expected GetSubscriptions to be called")
+	}
+
+	// Verify state mutations
+	if client.username != "testbot" {
+		t.Errorf("client.username = %q, want testbot", client.username)
+	}
+	if client.ws == nil {
+		t.Error("expected WebSocket connection to be set")
+	}
+	if len(client.dmRooms) != 2 {
+		t.Errorf("len(client.dmRooms) = %d, want 2", len(client.dmRooms))
+	}
+	if !client.dmRooms["dm1"] || !client.dmRooms["dm2"] {
+		t.Errorf("dmRooms = %+v, expected dm1 and dm2", client.dmRooms)
+	}
+
+	// Verify WebSocket dialer was called with correct URL
+	expectedURL := "wss://test.example.com/websocket"
+	if mockDialer.dialedURL != expectedURL {
+		t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, expectedURL)
+	}
+
+	// Verify DDP connect message was sent
+	writes := mockWs.GetWrites()
+	if len(writes) == 0 {
+		t.Fatal("expected DDP connect message to be sent")
+	}
+
+	connectMsg, ok := writes[0].(ddpMessage)
+	if !ok {
+		t.Fatalf("first write has unexpected type: %T", writes[0])
+	}
+	if connectMsg.Msg != "connect" {
+		t.Errorf("first message.Msg = %q, want connect", connectMsg.Msg)
+	}
+	if connectMsg.Version != "1" {
+		t.Errorf("connect message Version = %q, want 1", connectMsg.Version)
+	}
+	if len(connectMsg.Support) == 0 || connectMsg.Support[0] != "1" {
+		t.Errorf("connect message Support = %v, want [1]", connectMsg.Support)
+	}
+}
+
+func TestClient_Start_FetchUsernameError(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "/api/v1/me") {
+			return &http.Response{
+				StatusCode: http.StatusUnauthorized,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":false}`))),
+			}, nil
+		}
+		t.Fatalf("unexpected request path: %s", r.URL.Path)
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+
+	err := client.Start()
+	if err == nil {
+		t.Fatal("expected error when FetchUsername fails")
+	}
+	if !strings.Contains(err.Error(), "failed to fetch username") {
+		t.Errorf("error message = %q, want it to contain 'failed to fetch username'", err.Error())
+	}
+}
+
+func TestClient_Start_SetStatusError(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/me"):
+			resp := map[string]interface{}{"username": "testbot", "success": true}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":false}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+
+	err := client.Start()
+	if err == nil {
+		t.Fatal("expected error when SetStatusOnline fails")
+	}
+	if !strings.Contains(err.Error(), "failed to set status online") {
+		t.Errorf("error message = %q, want it to contain 'failed to set status online'", err.Error())
+	}
+}
+
+func TestClient_Start_GetSubscriptionsError(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/me"):
+			resp := map[string]interface{}{"username": "testbot", "success": true}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/subscriptions.get"):
+			return &http.Response{
+				StatusCode: http.StatusInternalServerError,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":false}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+
+	err := client.Start()
+	if err == nil {
+		t.Fatal("expected error when GetSubscriptions fails")
+	}
+	if !strings.Contains(err.Error(), "failed to get subscriptions") {
+		t.Errorf("error message = %q, want it to contain 'failed to get subscriptions'", err.Error())
+	}
+}
+
+func TestClient_Start_WebSocketDialError(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/me"):
+			resp := map[string]interface{}{"username": "testbot", "success": true}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/subscriptions.get"):
+			resp := map[string]interface{}{
+				"update":  []map[string]interface{}{},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	// Mock dialer that returns an error
+	mockDialer := &mockWSDialer{
+		err: fmt.Errorf("connection refused"),
+	}
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+	client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+	client.wsDialer = mockDialer
+
+	err := client.Start()
+	if err == nil {
+		t.Fatal("expected error when WebSocket dial fails")
+	}
+	if !strings.Contains(err.Error(), "failed to connect to WebSocket") {
+		t.Errorf("error message = %q, want it to contain 'failed to connect to WebSocket'", err.Error())
+	}
+}
+
+func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	mockWs := testutil.NewMockWsConn()
+
+	tests := []struct {
+		name        string
+		baseURL     string
+		expectedWS  string
+	}{
+		{
+			name:       "https_to_wss",
+			baseURL:    "https://chat.example.com",
+			expectedWS: "wss://chat.example.com/websocket",
+		},
+		{
+			name:       "http_to_ws",
+			baseURL:    "http://localhost:3000",
+			expectedWS: "ws://localhost:3000/websocket",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				switch {
+				case strings.Contains(r.URL.Path, "/api/v1/me"):
+					resp := map[string]interface{}{"username": "testbot", "success": true}
+					body, _ := json.Marshal(resp)
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+				case strings.Contains(r.URL.Path, "/api/v1/users.setStatus"):
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"success":true}`)))}, nil
+				case strings.Contains(r.URL.Path, "/api/v1/subscriptions.get"):
+					resp := map[string]interface{}{"update": []map[string]interface{}{}, "success": true}
+					body, _ := json.Marshal(resp)
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(body))}, nil
+				default:
+					t.Fatalf("unexpected request path: %s", r.URL.Path)
+				}
+				return nil, nil
+			})
+
+			mockDialer := &mockWSDialer{conn: mockWs}
+			httpClient := &http.Client{Transport: transport}
+			apiClient := NewAPIClient(tt.baseURL, "user", "token", httpClient, logger)
+
+			client := NewClientWithAPI(apiClient, "TestBot", &mockResponseGenerator{}, false, false, logger, "")
+			client.wsDialer = mockDialer
+
+			err := client.Start()
+			if err != nil {
+				t.Fatalf("Start() failed: %v", err)
+			}
+
+			if mockDialer.dialedURL != tt.expectedWS {
+				t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, tt.expectedWS)
+			}
+		})
+	}
+}
