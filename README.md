@@ -16,6 +16,7 @@
 
 </div>
 
+
 ## Features
 
 - WebSocket-based Rocket.Chat client
@@ -23,6 +24,21 @@
 - Pluggable response generators (streaming + non-streaming)
 - Multi-bot support
 - HTTP API for programmatic triggers
+
+
+## Architecture
+
+<div align="center">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/assets/architecture-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset=".github/assets/architecture-light.webp">
+  <img
+    alt="Architecture diagram: Rocket.Chat connects via WebSocket to rocketbot, rocketbot connects via REST to n8n webhook"
+    width="600"
+    src=".github/assets/architecture-light.webp">
+</picture>
+</div>
+
 
 ## Quick Start
 
