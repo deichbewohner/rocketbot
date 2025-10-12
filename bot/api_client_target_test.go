@@ -250,3 +250,84 @@ func TestAPIClient_ResolveChannel(t *testing.T) {
 		})
 	}
 }
+
+func TestAPIClient_ResolveChannel_ResourceTracking(t *testing.T) {
+	tests := []struct {
+		name        string
+		channelName string
+		wantRoomID  string
+	}{
+		{
+			name:        "private_group_makes_two_requests",
+			channelName: "#team-private",
+			wantRoomID:  "group-team-private-456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baseTransport := testutil.RoundTripperFunc(
+				func(r *http.Request) (*http.Response, error) {
+					// Fail on channels.info
+					if strings.Contains(r.URL.Path, "/api/v1/channels.info") {
+						return &http.Response{
+							StatusCode: http.StatusNotFound,
+							Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":false}`))),
+							Header:     make(http.Header),
+						}, nil
+					}
+
+					// Succeed on groups.info
+					if strings.Contains(r.URL.Path, "/api/v1/groups.info") {
+						resp := map[string]interface{}{
+							"group": map[string]interface{}{
+								"_id": tt.wantRoomID,
+							},
+							"success": true,
+						}
+						body, _ := json.Marshal(resp)
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Body:       io.NopCloser(bytes.NewReader(body)),
+							Header:     make(http.Header),
+						}, nil
+					}
+
+					return &http.Response{
+						StatusCode: http.StatusNotFound,
+						Body:       io.NopCloser(bytes.NewReader([]byte("{}"))),
+						Header:     make(http.Header),
+					}, nil
+				},
+			)
+
+			tracked := testutil.NewTrackedTransport(baseTransport)
+			defer tracked.AssertAllClosed(t)
+
+			client := &http.Client{Transport: tracked}
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
+
+			roomID, err := api.ResolveChannel(context.Background(), tt.channelName)
+			if err != nil {
+				t.Fatalf("ResolveChannel() error = %v", err)
+			}
+			if roomID != tt.wantRoomID {
+				t.Errorf("ResolveChannel() = %q, want %q", roomID, tt.wantRoomID)
+			}
+
+			opened, closed := tracked.Stats()
+			if opened != 2 {
+				t.Errorf("opened %d response bodies, want 2", opened)
+			}
+			if closed != 2 {
+				t.Errorf("closed %d response bodies, want 2", closed)
+			}
+		})
+	}
+}
