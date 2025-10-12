@@ -65,7 +65,15 @@ func NewClient(
 	statusMessage string,
 ) *Client {
 	api := NewAPIClient(baseURL, userID, token, nil, logger)
-	return NewClientWithAPI(api, name, generator, streamedOutput, threadDefault, logger, statusMessage)
+	return NewClientWithAPI(
+		api,
+		name,
+		generator,
+		streamedOutput,
+		threadDefault,
+		logger,
+		statusMessage,
+	)
 }
 
 // NewClientWithAPI creates a Client with a pre-configured APIClient.

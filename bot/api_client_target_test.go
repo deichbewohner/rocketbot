@@ -88,7 +88,13 @@ func TestAPIClient_EnsureDMRoom(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			roomID, err := api.EnsureDMRoom(context.Background(), tt.username)
 
@@ -225,7 +231,13 @@ func TestAPIClient_ResolveChannel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			roomID, err := api.ResolveChannel(context.Background(), tt.channelName)
 

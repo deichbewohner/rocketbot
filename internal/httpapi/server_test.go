@@ -61,19 +61,44 @@ func TestServer_Authentication(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := testutil.NewTestLogger(t)
-			srv := httpapi.NewServer(map[string]*bot.Client{}, map[string]string{tt.slug: tt.configuredAuth}, logger)
+			srv := httpapi.NewServer(
+				map[string]*bot.Client{},
+				map[string]string{tt.slug: tt.configuredAuth},
+				logger,
+			)
 
 			// if a token is configured, register a dummy bot client so that auth can pass
 			if tt.configuredAuth != "" {
-				client := bot.NewClient("https://test.local", "user1", "token1", "BOT1", nil, false, false, logger, "")
+				client := bot.NewClient(
+					"https://test.local",
+					"user1",
+					"token1",
+					"BOT1",
+					nil,
+					false,
+					false,
+					logger,
+					"",
+				)
 				// mutate internal map via a new server to include bot
-				srv = httpapi.NewServer(map[string]*bot.Client{tt.slug: client}, map[string]string{tt.slug: tt.configuredAuth}, logger)
+				srv = httpapi.NewServer(
+					map[string]*bot.Client{tt.slug: client},
+					map[string]string{tt.slug: tt.configuredAuth},
+					logger,
+				)
 			}
 
-			payload := map[string]any{"target": map[string]string{"username": "alice"}, "text": "Hello"}
+			payload := map[string]any{
+				"target": map[string]string{"username": "alice"},
+				"text":   "Hello",
+			}
 			payloadBytes, _ := json.Marshal(payload)
 
-			req := httptest.NewRequest("POST", "/api/v1/bots/"+tt.slug+"/send", bytes.NewReader(payloadBytes))
+			req := httptest.NewRequest(
+				"POST",
+				"/api/v1/bots/"+tt.slug+"/send",
+				bytes.NewReader(payloadBytes),
+			)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
@@ -146,7 +171,11 @@ func TestServer_MaxBytesReader(t *testing.T) {
 		bot.NewAPIClient("https://test.local", "user1", "token1", mockHTTPClient, logger),
 		"BOT1", nil, false, false, logger, "",
 	)
-	srv := httpapi.NewServer(map[string]*bot.Client{"alerts": client}, map[string]string{"alerts": "secret"}, logger)
+	srv := httpapi.NewServer(
+		map[string]*bot.Client{"alerts": client},
+		map[string]string{"alerts": "secret"},
+		logger,
+	)
 
 	// Create a payload larger than 1MB
 	largePayload := map[string]any{
@@ -162,7 +191,11 @@ func TestServer_MaxBytesReader(t *testing.T) {
 	srv.Handler().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
-		t.Errorf("status code = %d, want %d (should reject large payload)", w.Code, http.StatusBadRequest)
+		t.Errorf(
+			"status code = %d, want %d (should reject large payload)",
+			w.Code,
+			http.StatusBadRequest,
+		)
 	}
 }
 
@@ -180,8 +213,24 @@ func TestServer_MultipleBots(t *testing.T) {
 
 	srv := httpapi.NewServer(
 		map[string]*bot.Client{
-			"alerts":        bot.NewClientWithAPI(bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger), "BOT1", nil, false, false, logger, ""),
-			"notifications": bot.NewClientWithAPI(bot.NewAPIClient("https://chat2.local", "user2", "token2", mockHTTPClient, logger), "BOT2", nil, false, false, logger, ""),
+			"alerts": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger),
+				"BOT1",
+				nil,
+				false,
+				false,
+				logger,
+				"",
+			),
+			"notifications": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat2.local", "user2", "token2", mockHTTPClient, logger),
+				"BOT2",
+				nil,
+				false,
+				false,
+				logger,
+				"",
+			),
 		},
 		map[string]string{
 			"alerts":        "secret1",
@@ -194,16 +243,28 @@ func TestServer_MultipleBots(t *testing.T) {
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Wrong token for notifications
-	req := httptest.NewRequest("POST", "/api/v1/bots/notifications/send", bytes.NewReader(payloadBytes))
+	req := httptest.NewRequest(
+		"POST",
+		"/api/v1/bots/notifications/send",
+		bytes.NewReader(payloadBytes),
+	)
 	req.Header.Set("Authorization", "Bearer secret1")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status code = %d, want %d (alerts token should not work for notifications)", w.Code, http.StatusUnauthorized)
+		t.Errorf(
+			"status code = %d, want %d (alerts token should not work for notifications)",
+			w.Code,
+			http.StatusUnauthorized,
+		)
 	}
 
 	// Correct token
-	req = httptest.NewRequest("POST", "/api/v1/bots/notifications/send", bytes.NewReader(payloadBytes))
+	req = httptest.NewRequest(
+		"POST",
+		"/api/v1/bots/notifications/send",
+		bytes.NewReader(payloadBytes),
+	)
 	req.Header.Set("Authorization", "Bearer secret2")
 	w = httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
@@ -226,7 +287,15 @@ func TestServer_BotWithoutAPIToken(t *testing.T) {
 	// support-bot is created but deliberately not added to server tokens
 	srv := httpapi.NewServer(
 		map[string]*bot.Client{
-			"alerts": bot.NewClientWithAPI(bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger), "BOT1", nil, false, false, logger, ""),
+			"alerts": bot.NewClientWithAPI(
+				bot.NewAPIClient("https://chat1.local", "user1", "token1", mockHTTPClient, logger),
+				"BOT1",
+				nil,
+				false,
+				false,
+				logger,
+				"",
+			),
 		},
 		map[string]string{
 			"alerts": "secret1",
@@ -238,13 +307,21 @@ func TestServer_BotWithoutAPIToken(t *testing.T) {
 	payload := map[string]any{"target": map[string]string{"username": "alice"}, "text": "Hello"}
 	payloadBytes, _ := json.Marshal(payload)
 
-	req := httptest.NewRequest("POST", "/api/v1/bots/support-bot/send", bytes.NewReader(payloadBytes))
+	req := httptest.NewRequest(
+		"POST",
+		"/api/v1/bots/support-bot/send",
+		bytes.NewReader(payloadBytes),
+	)
 	req.Header.Set("Authorization", "Bearer some-token")
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {
-		t.Errorf("status code = %d, want %d (support-bot should not be accessible without API token)", w.Code, http.StatusUnauthorized)
+		t.Errorf(
+			"status code = %d, want %d (support-bot should not be accessible without API token)",
+			w.Code,
+			http.StatusUnauthorized,
+		)
 	}
 
 	var resp map[string]any
@@ -275,11 +352,26 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 			name: "text_required",
 			bots: map[string]*bot.Client{
 				"alerts": bot.NewClientWithAPI(
-					bot.NewAPIClient("https://test.local", "user", "token", &http.Client{Transport: testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
-						t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
-						return nil, nil
-					})}, logger),
-					"BOT1", nil, false, false, logger, "",
+					bot.NewAPIClient(
+						"https://test.local",
+						"user",
+						"token",
+						&http.Client{
+							Transport: testutil.RoundTripperFunc(
+								func(r *http.Request) (*http.Response, error) {
+									t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
+									return nil, nil
+								},
+							),
+						},
+						logger,
+					),
+					"BOT1",
+					nil,
+					false,
+					false,
+					logger,
+					"",
 				),
 			},
 			payload:    map[string]any{"target": map[string]any{"roomId": "room123"}},
@@ -290,11 +382,26 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 			name: "invalid_target",
 			bots: map[string]*bot.Client{
 				"alerts": bot.NewClientWithAPI(
-					bot.NewAPIClient("https://test.local", "user", "token", &http.Client{Transport: testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
-						t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
-						return nil, nil
-					})}, logger),
-					"BOT1", nil, false, false, logger, "",
+					bot.NewAPIClient(
+						"https://test.local",
+						"user",
+						"token",
+						&http.Client{
+							Transport: testutil.RoundTripperFunc(
+								func(r *http.Request) (*http.Response, error) {
+									t.Fatalf("unexpected HTTP call to %s", r.URL.Path)
+									return nil, nil
+								},
+							),
+						},
+						logger,
+					),
+					"BOT1",
+					nil,
+					false,
+					false,
+					logger,
+					"",
 				),
 			},
 			payload: map[string]any{
@@ -311,7 +418,11 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 			srv := httpapi.NewServer(tt.bots, map[string]string{"alerts": "secret"}, logger)
 			payloadBytes, _ := json.Marshal(tt.payload)
 
-			req := httptest.NewRequest("POST", "/api/v1/bots/alerts/send", bytes.NewReader(payloadBytes))
+			req := httptest.NewRequest(
+				"POST",
+				"/api/v1/bots/alerts/send",
+				bytes.NewReader(payloadBytes),
+			)
 			req.Header.Set("Authorization", "Bearer secret")
 			w := httptest.NewRecorder()
 
@@ -345,8 +456,10 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"room":{"_id":"dm-room"},"success":true}`)),
-				Header:     make(http.Header),
+				Body: io.NopCloser(
+					strings.NewReader(`{"room":{"_id":"dm-room"},"success":true}`),
+				),
+				Header: make(http.Header),
 			}, nil
 
 		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
@@ -358,8 +471,10 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"message":{"_id":"msg123"},"success":true}`)),
-				Header:     make(http.Header),
+				Body: io.NopCloser(
+					strings.NewReader(`{"message":{"_id":"msg123"},"success":true}`),
+				),
+				Header: make(http.Header),
 			}, nil
 		default:
 			t.Fatalf("unexpected HTTP call: %s", r.URL.Path)
@@ -372,7 +487,11 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
 		"BOT1", nil, false, false, logger, "",
 	)
-	srv := httpapi.NewServer(map[string]*bot.Client{"alerts": botClient}, map[string]string{"alerts": "secret"}, logger)
+	srv := httpapi.NewServer(
+		map[string]*bot.Client{"alerts": botClient},
+		map[string]string{"alerts": "secret"},
+		logger,
+	)
 
 	payload := map[string]any{
 		"target": map[string]any{"username": "alice"},
@@ -390,7 +509,11 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 	if ensureCalls != 1 || postCalls != 1 {
-		t.Fatalf("expected one ensure call and one post call, got ensure=%d post=%d", ensureCalls, postCalls)
+		t.Fatalf(
+			"expected one ensure call and one post call, got ensure=%d post=%d",
+			ensureCalls,
+			postCalls,
+		)
 	}
 
 	var resp map[string]any
@@ -424,8 +547,10 @@ func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
 
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`{"message":{"_id":"msg456"},"success":true}`)),
-			Header:     make(http.Header),
+			Body: io.NopCloser(
+				strings.NewReader(`{"message":{"_id":"msg456"},"success":true}`),
+			),
+			Header: make(http.Header),
 		}, nil
 	})
 
@@ -434,7 +559,11 @@ func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
 		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
 		"BOT1", nil, false, false, logger, "",
 	)
-	srv := httpapi.NewServer(map[string]*bot.Client{"alerts": botClient}, map[string]string{"alerts": "secret"}, logger)
+	srv := httpapi.NewServer(
+		map[string]*bot.Client{"alerts": botClient},
+		map[string]string{"alerts": "secret"},
+		logger,
+	)
 
 	payload := map[string]any{
 		"target": map[string]any{"roomId": "room123"},

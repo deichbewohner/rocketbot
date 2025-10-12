@@ -62,7 +62,12 @@ func getLogLevel() slog.Level {
 }
 
 // createBot creates and configures a bot client from config
-func createBot(botCfg config.BotConfig, slug string, httpClient *http.Client, logger *slog.Logger) (*bot.Client, error) {
+func createBot(
+	botCfg config.BotConfig,
+	slug string,
+	httpClient *http.Client,
+	logger *slog.Logger,
+) (*bot.Client, error) {
 	botLogger := logger.With("bot", slug)
 
 	// Validate webhook URL

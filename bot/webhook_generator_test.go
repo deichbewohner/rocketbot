@@ -198,7 +198,11 @@ func TestWebhookGenerator_AuthHeaderPropagation(t *testing.T) {
 	}
 
 	if authHeaderReceived != "Bearer secret-token-123" {
-		t.Errorf("Authorization header = %q, want %q", authHeaderReceived, "Bearer secret-token-123")
+		t.Errorf(
+			"Authorization header = %q, want %q",
+			authHeaderReceived,
+			"Bearer secret-token-123",
+		)
 	}
 }
 
@@ -236,10 +240,12 @@ func TestWebhookGenerator_ContextMetadata(t *testing.T) {
 	}
 
 	// Verify metadata was included in payload
-	if replyMsgID, ok := receivedPayload["replyMessageId"].(string); !ok || replyMsgID != "reply-msg-123" {
+	if replyMsgID, ok := receivedPayload["replyMessageId"].(string); !ok ||
+		replyMsgID != "reply-msg-123" {
 		t.Errorf("replyMessageId = %v, want %q", receivedPayload["replyMessageId"], "reply-msg-123")
 	}
-	if replyRoomID, ok := receivedPayload["replyRoomId"].(string); !ok || replyRoomID != "reply-room-456" {
+	if replyRoomID, ok := receivedPayload["replyRoomId"].(string); !ok ||
+		replyRoomID != "reply-room-456" {
 		t.Errorf("replyRoomId = %v, want %q", receivedPayload["replyRoomId"], "reply-room-456")
 	}
 }

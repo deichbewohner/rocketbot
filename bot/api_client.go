@@ -21,7 +21,11 @@ type APIClient struct {
 }
 
 // NewAPIClient creates a new Rocket.Chat REST API client
-func NewAPIClient(baseURL, userID, token string, httpClient *http.Client, logger *slog.Logger) *APIClient {
+func NewAPIClient(
+	baseURL, userID, token string,
+	httpClient *http.Client,
+	logger *slog.Logger,
+) *APIClient {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
@@ -521,7 +525,14 @@ func (a *APIClient) ResolveChannel(ctx context.Context, channelName string) (str
 			return "", err
 		}
 		if result.Success {
-			a.logger.DebugContext(ctx, "resolved channel", "name", channelName, "roomId", result.Channel.ID)
+			a.logger.DebugContext(
+				ctx,
+				"resolved channel",
+				"name",
+				channelName,
+				"roomId",
+				result.Channel.ID,
+			)
 			return result.Channel.ID, nil
 		}
 	}
@@ -550,7 +561,14 @@ func (a *APIClient) ResolveChannel(ctx context.Context, channelName string) (str
 			return "", err
 		}
 		if result.Success {
-			a.logger.DebugContext(ctx, "resolved group", "name", channelName, "roomId", result.Group.ID)
+			a.logger.DebugContext(
+				ctx,
+				"resolved group",
+				"name",
+				channelName,
+				"roomId",
+				result.Group.ID,
+			)
 			return result.Group.ID, nil
 		}
 	}

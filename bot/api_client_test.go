@@ -94,7 +94,13 @@ func TestAPIClient_FetchUsername(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			got, err := api.FetchUsername()
 
@@ -179,7 +185,13 @@ func TestAPIClient_SetStatusOnline(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			err := api.SetStatusOnline(tt.message)
 
@@ -255,7 +267,13 @@ func TestAPIClient_GetSubscriptions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			rooms, dmRooms, err := api.GetSubscriptions()
 
@@ -368,7 +386,13 @@ func TestAPIClient_PostMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			msgID, err := api.PostMessage(context.Background(), tt.roomID, tt.text, tt.tmid)
 
@@ -425,7 +449,13 @@ func TestAPIClient_UpdateMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			err := api.UpdateMessage(context.Background(), "room456", "msg123", "Updated text")
 
@@ -513,12 +543,22 @@ func TestAPIClient_FetchHistory(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			messages := api.FetchHistory(context.Background(), "room1", 10)
 
 			if len(messages) != tt.wantCount {
-				t.Errorf("FetchHistory() returned %d messages, want %d", len(messages), tt.wantCount)
+				t.Errorf(
+					"FetchHistory() returned %d messages, want %d",
+					len(messages),
+					tt.wantCount,
+				)
 			}
 
 			// Verify chronological order
@@ -621,7 +661,13 @@ func TestAPIClient_FetchMessage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			client := &http.Client{Transport: tt.roundTripper}
-			api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+			api := bot.NewAPIClient(
+				"https://test.example.com",
+				"test-user",
+				"test-token",
+				client,
+				testutil.NewTestLogger(t),
+			)
 
 			msg := api.FetchMessage(context.Background(), "msg123")
 
@@ -748,7 +794,13 @@ func newThreadHistoryAPIClient(t *testing.T, responses []*http.Response) *bot.AP
 	})
 
 	client := &http.Client{Transport: roundTripper}
-	api := bot.NewAPIClient("https://test.example.com", "test-user", "test-token", client, testutil.NewTestLogger(t))
+	api := bot.NewAPIClient(
+		"https://test.example.com",
+		"test-user",
+		"test-token",
+		client,
+		testutil.NewTestLogger(t),
+	)
 
 	t.Cleanup(func() {
 		if idx != len(responses) {
