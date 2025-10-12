@@ -34,7 +34,7 @@ func TestAPIClient_EnsureDMRoom(t *testing.T) {
 				}
 
 				var payload map[string]string
-				json.NewDecoder(r.Body).Decode(&payload)
+				_ = json.NewDecoder(r.Body).Decode(&payload)
 				if payload["username"] != "alice" {
 					t.Errorf("username = %q, want %q", payload["username"], "alice")
 				}

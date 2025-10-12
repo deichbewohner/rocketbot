@@ -143,7 +143,7 @@ func (g *WebhookGenerator) GenerateResponseStream(
 	)
 
 	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
+		_ = resp.Body.Close() // explicitly ignore close error in error path
 		close(outCh)
 		return outCh, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -151,7 +151,11 @@ func (g *WebhookGenerator) GenerateResponseStream(
 	// Start goroutine to parse stream and convert events to text chunks
 	go func() {
 		defer close(outCh)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				g.logger.Warn("failed to close webhook response body", "error", err)
+			}
+		}()
 
 		// Delegate parsing to injected parser
 		eventCh, err := g.parser.Parse(ctx, resp.Body)

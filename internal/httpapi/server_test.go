@@ -113,7 +113,7 @@ func TestServer_Authentication(t *testing.T) {
 
 			if tt.wantErrMsg != "" {
 				var resp map[string]any
-				json.NewDecoder(w.Body).Decode(&resp)
+				_ = json.NewDecoder(w.Body).Decode(&resp)
 				if !strings.Contains(resp["error"].(string), tt.wantErrMsg) {
 					t.Errorf("error = %q, want to contain %q", resp["error"], tt.wantErrMsg)
 				}
@@ -132,7 +132,7 @@ func TestServer_Health(t *testing.T) {
 		t.Errorf("status code = %d, want %d", w.Code, http.StatusOK)
 	}
 	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp["status"] != "ok" {
 		t.Errorf("status = %q, want %q", resp["status"], "ok")
 	}
@@ -325,7 +325,7 @@ func TestServer_BotWithoutAPIToken(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if !strings.Contains(resp["error"].(string), "unauthorized") {
 		t.Errorf("error = %q, want to contain 'unauthorized'", resp["error"])
 	}
@@ -433,7 +433,7 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 			}
 
 			var resp map[string]any
-			json.NewDecoder(w.Body).Decode(&resp)
+			_ = json.NewDecoder(w.Body).Decode(&resp)
 			if gotErr, _ := resp["error"].(string); !strings.Contains(gotErr, tt.wantErr) {
 				t.Fatalf("error = %q, want substring %q", gotErr, tt.wantErr)
 			}
@@ -450,7 +450,7 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/api/v1/im.create"):
 			ensureCalls++
 			var payload map[string]string
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			if payload["username"] != "alice" {
 				t.Fatalf("username = %q, want alice", payload["username"])
 			}
@@ -465,7 +465,7 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
 			postCalls++
 			var payload map[string]any
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			if payload["roomId"] != "dm-room" {
 				t.Fatalf("roomId = %q, want dm-room", payload["roomId"])
 			}
@@ -517,7 +517,7 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp["success"] != true {
 		t.Fatalf("success = %v, want true", resp["success"])
 	}
@@ -537,7 +537,7 @@ func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
 		postCalls++
 
 		var payload map[string]any
-		json.NewDecoder(r.Body).Decode(&payload)
+		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if payload["roomId"] != "room123" {
 			t.Fatalf("roomId = %q, want room123", payload["roomId"])
 		}
@@ -585,7 +585,7 @@ func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
 	}
 
 	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp["roomId"] != "room123" {
 		t.Fatalf("roomId = %v, want room123", resp["roomId"])
 	}

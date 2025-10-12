@@ -190,10 +190,13 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 }
 
 // writeJSON writes a JSON response
-func (s *Server) writeJSON(w http.ResponseWriter, status int, v interface{}) {
+func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.logger.Error("failed to encode JSON response", "error", err)
+	}
 }
 
 // writeError writes an error response

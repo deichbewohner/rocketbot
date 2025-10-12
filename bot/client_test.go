@@ -1036,7 +1036,7 @@ func TestClient_HandleDMResponse_NonStreaming(t *testing.T) {
 			}, nil
 		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
 			var payload map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			postPayload = payload
 
 			resp := map[string]interface{}{
@@ -1050,7 +1050,7 @@ func TestClient_HandleDMResponse_NonStreaming(t *testing.T) {
 			}, nil
 		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
 			var payload map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			updatePayload = payload
 			updateCount++
 			return &http.Response{
@@ -1227,7 +1227,7 @@ func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
 			}, nil
 		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
 			var payload map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			postPayload = payload
 			resp := map[string]interface{}{
 				"message": map[string]interface{}{"_id": "reply-msg-id"},
@@ -1240,7 +1240,7 @@ func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
 			}, nil
 		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
 			var payload map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			updatePayload = payload
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -1365,7 +1365,7 @@ func TestClient_HandleDMResponse_Streaming(t *testing.T) {
 			}, nil
 		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
 			var payload map[string]interface{}
-			json.NewDecoder(r.Body).Decode(&payload)
+			_ = json.NewDecoder(r.Body).Decode(&payload)
 			postPayload = payload
 			resp := map[string]interface{}{
 				"message": map[string]interface{}{"_id": "reply-msg-id"},
@@ -1521,7 +1521,7 @@ func TestClient_HandleNonStreamingResponse(t *testing.T) {
 					}
 					// Decode body to check threadID
 					var payload map[string]interface{}
-					json.NewDecoder(r.Body).Decode(&payload)
+					_ = json.NewDecoder(r.Body).Decode(&payload)
 					if tmid, ok := payload["tmid"].(string); ok {
 						postedThreadID = tmid
 					}
@@ -1646,7 +1646,7 @@ func TestClient_HandleStreamingResponse(t *testing.T) {
 						}, nil
 					}
 					var payload map[string]interface{}
-					json.NewDecoder(r.Body).Decode(&payload)
+					_ = json.NewDecoder(r.Body).Decode(&payload)
 					if tmid, ok := payload["tmid"].(string); ok {
 						postedThreadID = tmid
 					}

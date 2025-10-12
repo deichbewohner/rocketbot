@@ -177,7 +177,9 @@ func (c *Client) Start() error {
 func (c *Client) Stop() {
 	close(c.stopChan)
 	if c.ws != nil {
-		c.ws.Close()
+		if err := c.ws.Close(); err != nil {
+			c.logger.Warn("websocket close failed", "error", err)
+		}
 	}
 }
 
@@ -192,24 +194,29 @@ func (c *Client) sendMessage(msg ddpMessage) error {
 func (c *Client) callMethod(method string, params ...interface{}) string {
 	id := generateID()
 	c.pending[id] = method
-	c.sendMessage(ddpMessage{
+	if err := c.sendMessage(ddpMessage{
 		Msg:    "method",
 		Method: method,
 		ID:     id,
 		Params: params,
-	})
+	}); err != nil {
+		delete(c.pending, id) // Keep state consistent
+		c.logger.Error("failed to send DDP method call", "method", method, "id", id, "error", err)
+	}
 	return id
 }
 
 // subscribe subscribes to a DDP stream
 func (c *Client) subscribe(name string, params ...interface{}) string {
 	id := generateID()
-	c.sendMessage(ddpMessage{
+	if err := c.sendMessage(ddpMessage{
 		Msg:    "sub",
 		ID:     id,
 		Name:   name,
 		Params: params,
-	})
+	}); err != nil {
+		c.logger.Error("failed to send DDP subscription", "name", name, "id", id, "error", err)
+	}
 	return id
 }
 
@@ -265,7 +272,9 @@ func (c *Client) processMessage(msg *ddpMessage, initialRooms []string) {
 		c.handleChangedMessage(msg)
 
 	case "ping":
-		c.sendMessage(ddpMessage{Msg: "pong"})
+		if err := c.sendMessage(ddpMessage{Msg: "pong"}); err != nil {
+			c.logger.Warn("failed to send pong", "error", err)
+		}
 	}
 }
 
@@ -429,7 +438,7 @@ func (c *Client) handleDMResponse(message Message) {
 	if err := c.setTypingIndicator(message.RoomID, true); err != nil {
 		c.logger.ErrorContext(ctx, "error setting typing indicator", "error", err)
 	}
-	defer c.setTypingIndicator(message.RoomID, false)
+	defer func() { _ = c.setTypingIndicator(message.RoomID, false) }()
 
 	// Check if generator supports streaming AND streamed output is enabled
 	if c.streamedOutput {

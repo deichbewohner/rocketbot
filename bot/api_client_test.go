@@ -311,7 +311,7 @@ func TestAPIClient_PostMessage(t *testing.T) {
 			roundTripper: func(r *http.Request) (*http.Response, error) {
 				// Verify request
 				var payload map[string]interface{}
-				json.NewDecoder(r.Body).Decode(&payload)
+				_ = json.NewDecoder(r.Body).Decode(&payload)
 				if payload["roomId"] != "room123" {
 					t.Errorf("roomId = %v, want room123", payload["roomId"])
 				}
@@ -345,7 +345,7 @@ func TestAPIClient_PostMessage(t *testing.T) {
 			tmid:   "thread456",
 			roundTripper: func(r *http.Request) (*http.Response, error) {
 				var payload map[string]interface{}
-				json.NewDecoder(r.Body).Decode(&payload)
+				_ = json.NewDecoder(r.Body).Decode(&payload)
 				if payload["tmid"] != "thread456" {
 					t.Errorf("tmid = %v, want thread456", payload["tmid"])
 				}
@@ -417,7 +417,7 @@ func TestAPIClient_UpdateMessage(t *testing.T) {
 			roundTripper: func(r *http.Request) (*http.Response, error) {
 				// Verify payload
 				var payload map[string]interface{}
-				json.NewDecoder(r.Body).Decode(&payload)
+				_ = json.NewDecoder(r.Body).Decode(&payload)
 				if payload["msgId"] != "msg123" {
 					t.Errorf("msgId = %v, want msg123", payload["msgId"])
 				}

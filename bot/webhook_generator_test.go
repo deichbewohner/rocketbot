@@ -29,13 +29,13 @@ func TestWebhookGenerator_GenerateResponse(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				flusher := w.(http.Flusher)
 
-				io.WriteString(w, `{"type":"begin"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"begin"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"item","content":"Hello"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"item","content":"Hello"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"item","content":" world"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"item","content":" world"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"end"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"end"}`+"\n")
 				flusher.Flush()
 			},
 			wantResponse: "Hello world",
@@ -102,15 +102,15 @@ func TestWebhookGenerator_GenerateResponseStream(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				flusher := w.(http.Flusher)
 
-				io.WriteString(w, `{"type":"begin"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"begin"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"item","content":"First"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"item","content":"First"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"item","content":"Second"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"item","content":"Second"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"item","content":"Third"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"item","content":"Third"}`+"\n")
 				flusher.Flush()
-				io.WriteString(w, `{"type":"end"}`+"\n")
+				_, _ = io.WriteString(w, `{"type":"end"}`+"\n")
 				flusher.Flush()
 			},
 			wantChunks: []string{"First", "Second", "Third"},
@@ -178,7 +178,7 @@ func TestWebhookGenerator_AuthHeaderPropagation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeaderReceived = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `{"type":"item","content":"test"}`+"\n")
+		_, _ = io.WriteString(w, `{"type":"item","content":"test"}`+"\n")
 	}))
 	defer server.Close()
 
@@ -215,7 +215,7 @@ func TestWebhookGenerator_ContextMetadata(t *testing.T) {
 			t.Errorf("failed to decode payload: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `{"type":"item","content":"test"}`+"\n")
+		_, _ = io.WriteString(w, `{"type":"item","content":"test"}`+"\n")
 	}))
 	defer server.Close()
 
@@ -259,7 +259,7 @@ func TestWebhookGenerator_HistoryPayload(t *testing.T) {
 			t.Errorf("failed to decode payload: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
-		io.WriteString(w, `{"type":"item","content":"response"}`+"\n")
+		_, _ = io.WriteString(w, `{"type":"item","content":"response"}`+"\n")
 	}))
 	defer server.Close()
 
@@ -325,7 +325,7 @@ func TestWebhookGenerator_ContextCancellation(t *testing.T) {
 		flusher := w.(http.Flusher)
 
 		for i := 0; i < 10; i++ {
-			io.WriteString(w, `{"type":"item","content":"chunk"}`+"\n")
+			_, _ = io.WriteString(w, `{"type":"item","content":"chunk"}`+"\n")
 			flusher.Flush()
 			time.Sleep(100 * time.Millisecond)
 		}

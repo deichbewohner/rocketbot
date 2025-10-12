@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -58,7 +59,7 @@ func (a *APIClient) FetchUsername() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -101,7 +102,7 @@ func (a *APIClient) SetStatusOnline(message string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -123,7 +124,7 @@ func (a *APIClient) GetSubscriptions() ([]string, map[string]bool, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -189,11 +190,16 @@ func (a *APIClient) PostMessage(ctx context.Context, roomID, text, tmid string) 
 		a.logger.ErrorContext(ctx, "error sending message", "error", err)
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) // drain for keep-alive
+		if err := resp.Body.Close(); err != nil {
+			a.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp) // best-effort decode for logs
 		a.logger.ErrorContext(
 			ctx,
 			"failed to send message",
@@ -246,11 +252,16 @@ func (a *APIClient) UpdateMessage(ctx context.Context, roomID, msgID, text strin
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body) // drain for keep-alive
+		if err := resp.Body.Close(); err != nil {
+			a.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		var errResp map[string]interface{}
-		json.NewDecoder(resp.Body).Decode(&errResp)
+		_ = json.NewDecoder(resp.Body).Decode(&errResp) // best-effort decode for logs
 		return fmt.Errorf(
 			"failed to update message: status %d, response %v",
 			resp.StatusCode,
@@ -280,7 +291,11 @@ func (a *APIClient) FetchHistory(ctx context.Context, roomID string, count int) 
 		a.logger.ErrorContext(ctx, "error fetching history", "error", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			a.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		a.logger.ErrorContext(ctx, "failed to fetch history", "status", resp.StatusCode)
@@ -332,7 +347,11 @@ func (a *APIClient) FetchMessage(ctx context.Context, msgID string) *Message {
 		a.logger.ErrorContext(ctx, "error fetching message", "error", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			a.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		a.logger.ErrorContext(ctx, "failed to fetch message", "status", resp.StatusCode)
@@ -405,7 +424,11 @@ func (a *APIClient) FetchThreadHistory(ctx context.Context, tmid string, count i
 		a.logger.ErrorContext(ctx, "error fetching thread history", "error", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			a.logger.WarnContext(ctx, "failed to close response body", "error", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		a.logger.ErrorContext(ctx, "failed to fetch thread history", "status", resp.StatusCode)
@@ -467,7 +490,7 @@ func (a *APIClient) EnsureDMRoom(ctx context.Context, username string) (string, 
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("failed to create/get DM: status %d", resp.StatusCode)
@@ -512,7 +535,8 @@ func (a *APIClient) ResolveChannel(ctx context.Context, channelName string) (str
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	body := resp.Body
+	defer func() { _ = body.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		var result struct {
@@ -548,7 +572,8 @@ func (a *APIClient) ResolveChannel(ctx context.Context, channelName string) (str
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	body2 := resp.Body
+	defer func() { _ = body2.Close() }()
 
 	if resp.StatusCode == http.StatusOK {
 		var result struct {
