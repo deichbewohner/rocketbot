@@ -46,13 +46,14 @@ type Client struct {
 	threadDefault  bool
 	statusMessage  string
 
-	ws       wsConn
-	wsDialer wsDialer
-	wsMu     sync.Mutex
-	pending  map[string]string
-	rooms    map[string]bool
-	dmRooms  map[string]bool
-	stopChan chan struct{}
+	ws        wsConn
+	wsDialer  wsDialer
+	wsMu      sync.Mutex
+	pending   map[string]string
+	pendingMu sync.Mutex // protects pending map
+	rooms     map[string]bool
+	dmRooms   map[string]bool
+	stopChan  chan struct{}
 }
 
 // NewClient creates a new Rocket.Chat bot client
@@ -193,14 +194,20 @@ func (c *Client) sendMessage(msg ddpMessage) error {
 // callMethod calls a DDP method and tracks it
 func (c *Client) callMethod(method string, params ...interface{}) string {
 	id := generateID()
+
+	c.pendingMu.Lock()
 	c.pending[id] = method
+	c.pendingMu.Unlock()
+
 	if err := c.sendMessage(ddpMessage{
 		Msg:    "method",
 		Method: method,
 		ID:     id,
 		Params: params,
 	}); err != nil {
+		c.pendingMu.Lock()
 		delete(c.pending, id) // Keep state consistent
+		c.pendingMu.Unlock()
 		c.logger.Error("failed to send DDP method call", "method", method, "id", id, "error", err)
 	}
 	return id
@@ -246,26 +253,30 @@ func (c *Client) processMessage(msg *ddpMessage, initialRooms []string) {
 		c.callMethod("login", map[string]string{"resume": c.api.token})
 
 	case "result":
-		if method, ok := c.pending[msg.ID]; ok {
+		c.pendingMu.Lock()
+		method, ok := c.pending[msg.ID]
+		if ok {
 			delete(c.pending, msg.ID)
-			if method == "login" {
-				c.logger.Info("logged in via websocket")
-				c.callMethod("UserPresence:online")
+		}
+		c.pendingMu.Unlock()
 
-				// Subscribe to all rooms
-				for _, rid := range initialRooms {
-					c.rooms[rid] = true
-					c.subscribe("stream-room-messages", rid, false)
-				}
-				c.logger.Info("subscribed to rooms", "count", len(initialRooms))
+		if ok && method == "login" {
+			c.logger.Info("logged in via websocket")
+			c.callMethod("UserPresence:online")
 
-				// Subscribe to membership changes
-				c.subscribe(
-					"stream-notify-user",
-					fmt.Sprintf("%s/subscriptions-changed", c.api.userID),
-					false,
-				)
+			// Subscribe to all rooms
+			for _, rid := range initialRooms {
+				c.rooms[rid] = true
+				c.subscribe("stream-room-messages", rid, false)
 			}
+			c.logger.Info("subscribed to rooms", "count", len(initialRooms))
+
+			// Subscribe to membership changes
+			c.subscribe(
+				"stream-notify-user",
+				fmt.Sprintf("%s/subscriptions-changed", c.api.userID),
+				false,
+			)
 		}
 
 	case "changed":
