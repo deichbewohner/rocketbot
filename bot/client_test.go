@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,24 @@ import (
 
 	"github.com/deichbewohner/rocketbot/bot/testutil"
 )
+
+func waitForCondition(t *testing.T, cond func() bool) {
+	t.Helper()
+	timeout := time.After(2 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if cond() {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-timeout:
+			t.Fatal("condition not met before timeout")
+		}
+	}
+}
 
 func TestParseMessage_TimestampVariants(t *testing.T) {
 	ms := int64(1609459200000) // 2021-01-01T00:00:00Z
@@ -491,19 +510,17 @@ func TestClient_HandleRoomMessage_IgnoreThreadMetadataUpdates(t *testing.T) {
 
 func TestClient_ProcessMessage(t *testing.T) {
 	tests := []struct {
-		name         string
-		msg          *ddpMessage
-		initialRooms []string
-		setupClient  func(*Client)
-		validate     func(*testing.T, *Client, []interface{})
+		name        string
+		msg         *ddpMessage
+		setupClient func(*Client)
+		validate    func(*testing.T, *Client, []interface{})
 	}{
 		{
 			name: "connected_sends_login",
 			msg: &ddpMessage{
 				Msg: "connected",
 			},
-			initialRooms: []string{},
-			setupClient:  func(c *Client) {},
+			setupClient: func(c *Client) {},
 			validate: func(t *testing.T, c *Client, writes []interface{}) {
 				t.Helper()
 				if len(writes) == 0 {
@@ -521,9 +538,10 @@ func TestClient_ProcessMessage(t *testing.T) {
 				Msg: "result",
 				ID:  "login-id",
 			},
-			initialRooms: []string{"room1", "room2"},
 			setupClient: func(c *Client) {
 				c.pending["login-id"] = "login"
+				c.rooms["room1"] = true
+				c.rooms["room2"] = true
 			},
 			validate: func(t *testing.T, c *Client, writes []interface{}) {
 				t.Helper()
@@ -545,32 +563,13 @@ func TestClient_ProcessMessage(t *testing.T) {
 			},
 		},
 		{
-			name: "ping_sends_pong",
-			msg: &ddpMessage{
-				Msg: "ping",
-			},
-			initialRooms: []string{},
-			setupClient:  func(c *Client) {},
-			validate: func(t *testing.T, c *Client, writes []interface{}) {
-				t.Helper()
-				if len(writes) == 0 {
-					t.Fatal("expected pong message")
-				}
-				pongMsg, ok := writes[0].(ddpMessage)
-				if !ok || pongMsg.Msg != "pong" {
-					t.Errorf("expected pong message, got %+v", writes[0])
-				}
-			},
-		},
-		{
 			name: "changed_calls_handleChangedMessage",
 			msg: &ddpMessage{
 				Msg:        "changed",
 				Collection: "stream-room-messages",
 				Fields:     map[string]interface{}{},
 			},
-			initialRooms: []string{},
-			setupClient:  func(c *Client) {},
+			setupClient: func(c *Client) {},
 			validate: func(t *testing.T, c *Client, writes []interface{}) {
 				t.Helper()
 				// No writes expected, just routing check
@@ -598,9 +597,40 @@ func TestClient_ProcessMessage(t *testing.T) {
 			client.wsMu.Unlock()
 
 			tt.setupClient(client)
-			client.processMessage(tt.msg, tt.initialRooms)
+			client.processMessage(tt.msg)
 			tt.validate(t, client, mockWs.GetWrites())
 		})
+	}
+}
+
+func TestClient_HandleMessages_PingSendsPong(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	client := &Client{
+		logger:   logger,
+		pending:  make(map[string]string),
+		rooms:    make(map[string]bool),
+		dmRooms:  make(map[string]bool),
+		stopChan: make(chan struct{}),
+	}
+
+	mockWs := testutil.NewMockWsConn()
+	mockWs.QueueRead(ddpMessage{Msg: "ping"})
+	client.wsMu.Lock()
+	client.ws = mockWs
+	client.wsMu.Unlock()
+
+	err := client.handleMessages(context.Background())
+	if err == nil {
+		t.Fatal("expected handleMessages to exit with error after queue drained")
+	}
+
+	writes := mockWs.GetWrites()
+	if len(writes) == 0 {
+		t.Fatal("expected pong message to be sent")
+	}
+	pong, ok := writes[0].(ddpMessage)
+	if !ok || pong.Msg != "pong" {
+		t.Fatalf("expected pong message, got %+v", writes[0])
 	}
 }
 
@@ -1829,9 +1859,22 @@ func TestClient_Start(t *testing.T) {
 	)
 	client.wsDialer = mockDialer
 
-	err := client.Start()
-	if err != nil {
-		t.Fatalf("Start() failed: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Run(ctx)
+	}()
+
+	waitForCondition(t, func() bool {
+		return len(mockWs.GetWrites()) > 0
+	})
+
+	cancel()
+	err := <-errCh
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() returned unexpected error: %v", err)
 	}
 
 	// Verify API orchestration sequence
@@ -1848,9 +1891,6 @@ func TestClient_Start(t *testing.T) {
 	// Verify state mutations
 	if client.username != "testbot" {
 		t.Errorf("client.username = %q, want testbot", client.username)
-	}
-	if client.ws == nil {
-		t.Error("expected WebSocket connection to be set")
 	}
 	if len(client.dmRooms) != 2 {
 		t.Errorf("len(client.dmRooms) = %d, want 2", len(client.dmRooms))
@@ -1913,7 +1953,7 @@ func TestClient_Start_FetchUsernameError(t *testing.T) {
 		"",
 	)
 
-	err := client.Start()
+	err := client.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error when FetchUsername fails")
 	}
@@ -1958,7 +1998,7 @@ func TestClient_Start_SetStatusError(t *testing.T) {
 		"",
 	)
 
-	err := client.Start()
+	err := client.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error when SetStatusOnline fails")
 	}
@@ -2011,7 +2051,7 @@ func TestClient_Start_GetSubscriptionsError(t *testing.T) {
 		"",
 	)
 
-	err := client.Start()
+	err := client.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error when GetSubscriptions fails")
 	}
@@ -2075,21 +2115,31 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 	)
 	client.wsDialer = mockDialer
 
-	err := client.Start()
-	if err == nil {
-		t.Fatal("expected error when WebSocket dial fails")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Run(ctx)
+	}()
+
+	waitForCondition(t, func() bool {
+		return mockDialer.dialedURL != ""
+	})
+
+	cancel()
+	if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run() returned unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "failed to connect to WebSocket") {
-		t.Errorf(
-			"error message = %q, want it to contain 'failed to connect to WebSocket'",
-			err.Error(),
-		)
+
+	expectedURL := "wss://test.com/websocket"
+	if mockDialer.dialedURL != expectedURL {
+		t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, expectedURL)
 	}
 }
 
 func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 	logger := testutil.NewTestLogger(t)
-	mockWs := testutil.NewMockWsConn()
 
 	tests := []struct {
 		name       string
@@ -2110,6 +2160,7 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			mockWs := testutil.NewMockWsConn()
 			transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
 				switch {
 				case strings.Contains(r.URL.Path, "/api/v1/me"):
@@ -2155,9 +2206,19 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 			)
 			client.wsDialer = mockDialer
 
-			err := client.Start()
-			if err != nil {
-				t.Fatalf("Start() failed: %v", err)
+			ctx, cancel := context.WithCancel(context.Background())
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- client.Run(ctx)
+			}()
+
+			waitForCondition(t, func() bool {
+				return mockDialer.dialedURL != ""
+			})
+
+			cancel()
+			if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
+				t.Fatalf("Run() returned unexpected error: %v", err)
 			}
 
 			if mockDialer.dialedURL != tt.expectedWS {

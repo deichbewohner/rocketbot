@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel"
 )
@@ -54,7 +56,12 @@ type Client struct {
 	rooms     map[string]bool
 	dmRooms   map[string]bool
 	stopChan  chan struct{}
+	stopOnce  sync.Once
 }
+
+var errStopRequested = errors.New("bot stop requested")
+
+const stableConnectionReset = time.Minute
 
 // NewClient creates a new Rocket.Chat bot client
 func NewClient(
@@ -122,32 +129,100 @@ func generateID() string {
 	return fmt.Sprintf("%x", rand.Uint64())
 }
 
-// Start connects the bot and begins listening for messages
-func (c *Client) Start() error {
+// Run connects the bot and keeps it running until the context is canceled or Stop is called.
+func (c *Client) Run(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	c.logger.Info("starting bot")
 
-	// Get username from API
+	if err := c.initialize(); err != nil {
+		return err
+	}
+
+	return c.runWithReconnect(ctx)
+}
+
+func (c *Client) initialize() error {
 	username, err := c.api.FetchUsername()
 	if err != nil {
 		return fmt.Errorf("failed to fetch username: %w", err)
 	}
 	c.username = username
 
-	// Set status to online via REST
 	if err := c.api.SetStatusOnline(c.statusMessage); err != nil {
 		return fmt.Errorf("failed to set status online: %w", err)
 	}
 	c.logger.Info("status set to online")
 
-	// Get all subscriptions (rooms) via REST
 	rooms, dmRooms, err := c.api.GetSubscriptions()
 	if err != nil {
 		return fmt.Errorf("failed to get subscriptions: %w", err)
 	}
-	c.dmRooms = dmRooms
-	c.logger.Info("found rooms", "total", len(rooms), "dms", len(dmRooms))
 
-	// Connect to WebSocket
+	c.rooms = make(map[string]bool, len(rooms))
+	for _, rid := range rooms {
+		c.rooms[rid] = true
+	}
+
+	c.dmRooms = make(map[string]bool, len(dmRooms))
+	for rid, isDM := range dmRooms {
+		if isDM {
+			c.dmRooms[rid] = true
+		}
+	}
+
+	c.logger.Info("found rooms", "total", len(rooms), "dms", len(c.dmRooms))
+	return nil
+}
+
+func (c *Client) runWithReconnect(ctx context.Context) error {
+	backoffCfg := backoff.NewExponentialBackOff()
+	backoffCfg.InitialInterval = time.Second
+	backoffCfg.MaxInterval = 30 * time.Second
+	backoffCfg.MaxElapsedTime = 0 // retry indefinitely
+
+	for {
+		if err := c.checkForStop(ctx); err != nil {
+			return err
+		}
+
+		sessionStart := time.Now()
+		if err := c.runSession(ctx); err != nil {
+			if errors.Is(err, errStopRequested) {
+				return nil
+			}
+			if errors.Is(err, context.Canceled) {
+				return ctx.Err()
+			}
+
+			c.logger.Error("websocket session ended", "error", err)
+
+			// If we stayed connected for a decent period, reset backoff
+			if time.Since(sessionStart) >= stableConnectionReset {
+				backoffCfg.Reset()
+			}
+
+			wait := backoffCfg.NextBackOff()
+			c.logger.Warn("retrying websocket connection", "retry_in", wait)
+
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.stopChan:
+				return nil
+			}
+			continue
+		}
+
+		// runSession only returns nil when stop has been requested
+		return nil
+	}
+}
+
+func (c *Client) runSession(ctx context.Context) error {
 	wsURL := strings.Replace(c.api.baseURL, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 	wsURL += "/websocket"
@@ -156,10 +231,19 @@ func (c *Client) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to WebSocket: %w", err)
 	}
+
+	c.wsMu.Lock()
 	c.ws = ws
+	c.wsMu.Unlock()
 	c.logger.Info("connected to websocket")
 
-	// Send connect message
+	defer c.closeWebSocket()
+
+	// Reset pending map for the new session
+	c.pendingMu.Lock()
+	c.pending = make(map[string]string)
+	c.pendingMu.Unlock()
+
 	if err := c.sendMessage(ddpMessage{
 		Msg:     "connect",
 		Version: "1",
@@ -168,19 +252,49 @@ func (c *Client) Start() error {
 		return fmt.Errorf("failed to send connect message: %w", err)
 	}
 
-	// Start message handler
-	go c.handleMessages(rooms)
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
-	return nil
+	// Ensure the websocket is closed when context or stop is triggered
+	go func() {
+		select {
+		case <-sessionCtx.Done():
+			c.closeWebSocket()
+		case <-c.stopChan:
+			c.closeWebSocket()
+		}
+	}()
+
+	return c.handleMessages(sessionCtx)
+}
+
+func (c *Client) checkForStop(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.stopChan:
+		return errStopRequested
+	default:
+		return nil
+	}
 }
 
 // Stop gracefully stops the bot
 func (c *Client) Stop() {
-	close(c.stopChan)
+	c.stopOnce.Do(func() {
+		close(c.stopChan)
+		c.closeWebSocket()
+	})
+}
+
+func (c *Client) closeWebSocket() {
+	c.wsMu.Lock()
+	defer c.wsMu.Unlock()
 	if c.ws != nil {
 		if err := c.ws.Close(); err != nil {
 			c.logger.Warn("websocket close failed", "error", err)
 		}
+		c.ws = nil
 	}
 }
 
@@ -188,6 +302,9 @@ func (c *Client) Stop() {
 func (c *Client) sendMessage(msg ddpMessage) error {
 	c.wsMu.Lock()
 	defer c.wsMu.Unlock()
+	if c.ws == nil {
+		return errors.New("websocket not connected")
+	}
 	return c.ws.WriteJSON(msg)
 }
 
@@ -228,25 +345,34 @@ func (c *Client) subscribe(name string, params ...interface{}) string {
 }
 
 // handleMessages processes incoming WebSocket messages
-func (c *Client) handleMessages(initialRooms []string) {
+func (c *Client) handleMessages(ctx context.Context) error {
 	for {
-		select {
-		case <-c.stopChan:
-			return
-		default:
-			var msg ddpMessage
-			if err := c.ws.ReadJSON(&msg); err != nil {
+		var msg ddpMessage
+		if err := c.ws.ReadJSON(&msg); err != nil {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.stopChan:
+				return errStopRequested
+			default:
 				c.logger.Error("error reading message", "error", err)
-				return
+				return err
 			}
-
-			c.processMessage(&msg, initialRooms)
 		}
+
+		if msg.Msg == "ping" {
+			if err := c.sendMessage(ddpMessage{Msg: "pong"}); err != nil {
+				c.logger.Warn("failed to send pong", "error", err)
+			}
+			continue
+		}
+
+		c.processMessage(&msg)
 	}
 }
 
 // processMessage handles a single DDP message
-func (c *Client) processMessage(msg *ddpMessage, initialRooms []string) {
+func (c *Client) processMessage(msg *ddpMessage) {
 	switch msg.Msg {
 	case "connected":
 		c.logger.Debug("websocket connected, logging in")
@@ -264,12 +390,13 @@ func (c *Client) processMessage(msg *ddpMessage, initialRooms []string) {
 			c.logger.Info("logged in via websocket")
 			c.callMethod("UserPresence:online")
 
-			// Subscribe to all rooms
-			for _, rid := range initialRooms {
-				c.rooms[rid] = true
+			// Subscribe to all rooms the bot knows about
+			count := 0
+			for rid := range c.rooms {
 				c.subscribe("stream-room-messages", rid, false)
+				count++
 			}
-			c.logger.Info("subscribed to rooms", "count", len(initialRooms))
+			c.logger.Info("subscribed to rooms", "count", count)
 
 			// Subscribe to membership changes
 			c.subscribe(

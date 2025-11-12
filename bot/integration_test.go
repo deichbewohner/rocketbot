@@ -1,7 +1,9 @@
 package bot_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -77,11 +79,18 @@ func TestIntegration_BotEndToEnd(t *testing.T) {
 		"online",
 	)
 
-	// Start bot (this will connect to our mock servers)
-	if err := client.Start(); err != nil {
-		t.Fatalf("bot.Start() failed: %v", err)
-	}
-	defer client.Stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		client.Stop()
+		if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("bot.Run() returned unexpected error: %v", err)
+		}
+	})
 
 	// Wait for bot to connect and subscribe
 	time.Sleep(100 * time.Millisecond)
@@ -435,9 +444,18 @@ func TestIntegration_BotStreaming(t *testing.T) {
 		"online",
 	)
 
-	if err := client.Start(); err != nil {
-		t.Fatalf("bot.Start() failed: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		client.Stop()
+		if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("bot.Run() returned unexpected error: %v", err)
+		}
+	})
 
 	time.Sleep(100 * time.Millisecond)
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -117,7 +118,8 @@ func createBot(
 }
 
 func main() {
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	// Setup OpenTelemetry trace provider
 	// If OTEL_EXPORTER_OTLP_ENDPOINT is set, traces are exported to collector
@@ -196,8 +198,8 @@ func main() {
 		wg.Add(1)
 		go func(c *bot.Client, slug string) {
 			defer wg.Done()
-			if err := c.Start(); err != nil {
-				logger.Error("failed to start bot", "bot", slug, "error", err)
+			if err := c.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Error("bot exited with error", "bot", slug, "error", err)
 				os.Exit(1)
 			}
 		}(client, botCfg.Slug)
@@ -237,10 +239,7 @@ func main() {
 	}
 
 	// Wait for interrupt signal
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
-
+	<-ctx.Done()
 	logger.Info("shutting down")
 
 	// Stop all bots
