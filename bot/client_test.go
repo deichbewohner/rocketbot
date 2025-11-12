@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1772,15 +1773,24 @@ func (m *mockStreamingGenerator) GenerateResponseStream(
 type mockWSDialer struct {
 	conn      wsConn
 	err       error
+	mu        sync.RWMutex
 	dialedURL string
 }
 
 func (m *mockWSDialer) Dial(urlStr string, requestHeader map[string][]string) (wsConn, error) {
+	m.mu.Lock()
 	m.dialedURL = urlStr
+	m.mu.Unlock()
 	if m.err != nil {
 		return nil, m.err
 	}
 	return m.conn, nil
+}
+
+func (m *mockWSDialer) DialedURL() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.dialedURL
 }
 
 func TestClient_Start(t *testing.T) {
@@ -1901,8 +1911,8 @@ func TestClient_Start(t *testing.T) {
 
 	// Verify WebSocket dialer was called with correct URL
 	expectedURL := "wss://test.example.com/websocket"
-	if mockDialer.dialedURL != expectedURL {
-		t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, expectedURL)
+	if mockDialer.DialedURL() != expectedURL {
+		t.Errorf("dialed URL = %q, want %q", mockDialer.DialedURL(), expectedURL)
 	}
 
 	// Verify DDP connect message was sent
@@ -2124,7 +2134,7 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 	}()
 
 	waitForCondition(t, func() bool {
-		return mockDialer.dialedURL != ""
+		return mockDialer.DialedURL() != ""
 	})
 
 	cancel()
@@ -2133,8 +2143,8 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 	}
 
 	expectedURL := "wss://test.com/websocket"
-	if mockDialer.dialedURL != expectedURL {
-		t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, expectedURL)
+	if mockDialer.DialedURL() != expectedURL {
+		t.Errorf("dialed URL = %q, want %q", mockDialer.DialedURL(), expectedURL)
 	}
 }
 
@@ -2213,7 +2223,7 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 			}()
 
 			waitForCondition(t, func() bool {
-				return mockDialer.dialedURL != ""
+				return mockDialer.DialedURL() != ""
 			})
 
 			cancel()
@@ -2221,8 +2231,8 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 				t.Fatalf("Run() returned unexpected error: %v", err)
 			}
 
-			if mockDialer.dialedURL != tt.expectedWS {
-				t.Errorf("dialed URL = %q, want %q", mockDialer.dialedURL, tt.expectedWS)
+			if mockDialer.DialedURL() != tt.expectedWS {
+				t.Errorf("dialed URL = %q, want %q", mockDialer.DialedURL(), tt.expectedWS)
 			}
 		})
 	}
