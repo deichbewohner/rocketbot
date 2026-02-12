@@ -8,7 +8,7 @@ client creds, HTTP API) directly to the public internet.
 ## Supported Versions
 
 - No guaranteed support window. Use the latest commit or the most recent tag.
-- The code targets Go `>= 1.25`. Older versions may work but aren't evaluated.
+- The code targets Go `>= 1.26`. Older versions may work but aren't evaluated.
 
 ## Report a Vulnerability (preferred)
 
