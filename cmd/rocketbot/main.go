@@ -71,36 +71,10 @@ func createBot(
 ) (*bot.Client, error) {
 	botLogger := logger.With("bot", slug)
 
-	// Validate webhook URL
-	if botCfg.WebhookURL == "" {
-		return nil, fmt.Errorf("missing webhook url for bot %s", slug)
+	generator, err := newGenerator(botCfg, httpClient, botLogger)
+	if err != nil {
+		return nil, err
 	}
-
-	// Create stream parser based on configuration
-	var parser bot.StreamParser
-	switch botCfg.ParserType {
-	case "n8n":
-		parser = bot.NewN8nParser(botLogger)
-	default:
-		return nil, fmt.Errorf("unknown parser type %q for bot %s", botCfg.ParserType, slug)
-	}
-
-	// Create webhook generator with injected parser
-	generator := bot.NewWebhookGenerator(
-		botCfg.WebhookURL,
-		botCfg.WebhookAuth,
-		parser,
-		httpClient,
-		botLogger,
-	)
-
-	botLogger.Info(
-		"using webhook generator",
-		"parser_type",
-		botCfg.ParserType,
-		"streamed_output",
-		botCfg.StreamedOutput,
-	)
 
 	client := bot.NewClient(
 		botCfg.URL,
@@ -115,6 +89,52 @@ func createBot(
 	)
 
 	return client, nil
+}
+
+func newGenerator(
+	botCfg config.BotConfig,
+	httpClient *http.Client,
+	logger *slog.Logger,
+) (bot.ResponseGenerator, error) {
+	switch botCfg.GeneratorType {
+	case "webhook":
+		return newWebhookGenerator(botCfg, httpClient, logger)
+	case "opencode":
+		logger.Info("using opencode generator", "streamed_output", botCfg.StreamedOutput)
+		return bot.NewOpenCodeGenerator(httpClient, logger), nil
+	default:
+		return nil, fmt.Errorf("unknown generator type %q", botCfg.GeneratorType)
+	}
+}
+
+func newWebhookGenerator(
+	botCfg config.BotConfig,
+	httpClient *http.Client,
+	logger *slog.Logger,
+) (bot.ResponseGenerator, error) {
+	var parser bot.StreamParser
+	switch botCfg.ParserType {
+	case "n8n":
+		parser = bot.NewN8nParser(logger)
+	default:
+		return nil, fmt.Errorf("unknown parser type %q for webhook generator", botCfg.ParserType)
+	}
+
+	logger.Info(
+		"using webhook generator",
+		"parser_type",
+		botCfg.ParserType,
+		"streamed_output",
+		botCfg.StreamedOutput,
+	)
+
+	return bot.NewWebhookGenerator(
+		botCfg.WebhookURL,
+		botCfg.WebhookAuth,
+		parser,
+		httpClient,
+		logger,
+	), nil
 }
 
 func main() {

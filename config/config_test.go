@@ -10,6 +10,7 @@ func TestLoad_SingleBot(t *testing.T) {
 	t.Setenv("BOT1_URL", "https://chat.example.com")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
 	t.Setenv("BOT1_PARSER_TYPE", "n8n")
 
 	cfg, err := Load()
@@ -28,6 +29,9 @@ func TestLoad_SingleBot(t *testing.T) {
 	if bot.URL != "https://chat.example.com" {
 		t.Errorf("URL = %q, want %q", bot.URL, "https://chat.example.com")
 	}
+	if bot.GeneratorType != "webhook" {
+		t.Errorf("GeneratorType = %q, want %q", bot.GeneratorType, "webhook")
+	}
 	if bot.ParserType != "n8n" {
 		t.Errorf("ParserType = %q, want %q", bot.ParserType, "n8n")
 	}
@@ -41,16 +45,19 @@ func TestLoad_MultipleBots(t *testing.T) {
 	t.Setenv("BOT1_URL", "https://chat1.example.com")
 	t.Setenv("BOT1_USER_ID", "user1")
 	t.Setenv("BOT1_TOKEN", "token1")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/bot1")
 	t.Setenv("BOT1_PARSER_TYPE", "n8n")
 	t.Setenv("BOT2_SLUG", "notifications")
 	t.Setenv("BOT2_URL", "https://chat2.example.com")
 	t.Setenv("BOT2_USER_ID", "user2")
 	t.Setenv("BOT2_TOKEN", "token2")
+	t.Setenv("BOT2_WEBHOOK_URL", "https://webhook.example.com/bot2")
 	t.Setenv("BOT2_PARSER_TYPE", "n8n")
 	t.Setenv("BOT3_SLUG", "support-bot")
 	t.Setenv("BOT3_URL", "https://chat3.example.com")
 	t.Setenv("BOT3_USER_ID", "user3")
 	t.Setenv("BOT3_TOKEN", "token3")
+	t.Setenv("BOT3_WEBHOOK_URL", "https://webhook.example.com/bot3")
 	t.Setenv("BOT3_PARSER_TYPE", "n8n")
 
 	cfg, err := Load()
@@ -129,6 +136,7 @@ func TestLoad_BooleanFlags(t *testing.T) {
 			t.Setenv("BOT1_URL", "https://chat.example.com")
 			t.Setenv("BOT1_USER_ID", "user123")
 			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
 			t.Setenv("BOT1_PARSER_TYPE", "n8n")
 			if tt.streamedOutput != "" {
 				t.Setenv("BOT1_STREAMED_OUTPUT", tt.streamedOutput)
@@ -158,6 +166,7 @@ func TestLoad_URLProcessing(t *testing.T) {
 	t.Setenv("BOT1_URL", "https://chat.example.com/")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
 	t.Setenv("BOT1_PARSER_TYPE", "n8n")
 
 	cfg, err := Load()
@@ -175,12 +184,12 @@ func TestLoad_URLProcessing(t *testing.T) {
 	}
 }
 
-func TestLoad_CustomParserType(t *testing.T) {
+func TestLoad_OpenCodeGenerator_Succeeds(t *testing.T) {
 	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com")
 	t.Setenv("BOT1_USER_ID", "user123")
 	t.Setenv("BOT1_TOKEN", "token456")
-	t.Setenv("BOT1_PARSER_TYPE", "openai")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
 
 	cfg, err := Load()
 	if err != nil {
@@ -188,8 +197,81 @@ func TestLoad_CustomParserType(t *testing.T) {
 	}
 
 	bot, _ := cfg.Get(0)
-	if bot.ParserType != "openai" {
-		t.Errorf("ParserType = %q, want %q", bot.ParserType, "openai")
+	if bot.GeneratorType != "opencode" {
+		t.Errorf("GeneratorType = %q, want %q", bot.GeneratorType, "opencode")
+	}
+	if bot.ParserType != "" {
+		t.Errorf("ParserType = %q, want empty", bot.ParserType)
+	}
+	if bot.WebhookURL != "" {
+		t.Errorf("WebhookURL = %q, want empty", bot.WebhookURL)
+	}
+}
+
+func TestLoad_OpenCodeGenerator_RejectsParserType(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "PARSER_TYPE must not be set") {
+		t.Fatalf("Load() error = %v, want parser type forbidden error", err)
+	}
+}
+
+func TestLoad_OpenCodeGenerator_RejectsWebhookURL(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "WEBHOOK_URL must not be set") {
+		t.Fatalf("Load() error = %v, want webhook url forbidden error", err)
+	}
+}
+
+func TestLoad_InvalidParserTypeErrors(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_PARSER_TYPE", "openai")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "PARSER_TYPE must be") {
+		t.Fatalf("Load() error = %v, want invalid parser type error", err)
+	}
+}
+
+func TestLoad_InvalidGeneratorTypeErrors(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "nope")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "GENERATOR_TYPE unknown") {
+		t.Fatalf("Load() error = %v, want invalid generator type error", err)
 	}
 }
 
@@ -272,11 +354,13 @@ func TestLoad_ValidationErrors(t *testing.T) {
 				"BOT1_URL":         "https://chat1.example.com",
 				"BOT1_USER_ID":     "user1",
 				"BOT1_TOKEN":       "token1",
+				"BOT1_WEBHOOK_URL": "https://webhook.example.com/bot1",
 				"BOT1_PARSER_TYPE": "n8n",
 				"BOT2_SLUG":        "alerts",
 				"BOT2_URL":         "https://chat2.example.com",
 				"BOT2_USER_ID":     "user2",
 				"BOT2_TOKEN":       "token2",
+				"BOT2_WEBHOOK_URL": "https://webhook.example.com/bot2",
 				"BOT2_PARSER_TYPE": "n8n",
 			},
 			errContains: "conflicts",
@@ -304,12 +388,24 @@ func TestLoad_ValidationErrors(t *testing.T) {
 		{
 			name: "missing_parser_type",
 			envVars: map[string]string{
-				"BOT1_SLUG":    "alerts",
-				"BOT1_URL":     "https://chat.example.com",
-				"BOT1_USER_ID": "user123",
-				"BOT1_TOKEN":   "token456",
+				"BOT1_SLUG":        "alerts",
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_WEBHOOK_URL": "https://webhook.example.com/api",
 			},
 			errContains: "BOT1_PARSER_TYPE is required",
+		},
+		{
+			name: "missing_webhook_url",
+			envVars: map[string]string{
+				"BOT1_SLUG":        "alerts",
+				"BOT1_URL":         "https://chat.example.com",
+				"BOT1_USER_ID":     "user123",
+				"BOT1_TOKEN":       "token456",
+				"BOT1_PARSER_TYPE": "n8n",
+			},
+			errContains: "BOT1_WEBHOOK_URL is required",
 		},
 		{
 			name:        "no_bots_configured",
@@ -426,6 +522,7 @@ func TestLoad_StatusMessage(t *testing.T) {
 			t.Setenv("BOT1_URL", "https://chat.example.com")
 			t.Setenv("BOT1_USER_ID", "user123")
 			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
 			t.Setenv("BOT1_PARSER_TYPE", "n8n")
 			if tt.statusMessage != "" {
 				t.Setenv("BOT1_STATUS_MESSAGE", tt.statusMessage)
@@ -463,6 +560,7 @@ func TestLoad_ValidSlugs(t *testing.T) {
 			t.Setenv("BOT1_URL", "https://chat.example.com")
 			t.Setenv("BOT1_USER_ID", "user123")
 			t.Setenv("BOT1_TOKEN", "token456")
+			t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
 			t.Setenv("BOT1_PARSER_TYPE", "n8n")
 
 			cfg, err := Load()

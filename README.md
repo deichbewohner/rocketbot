@@ -83,9 +83,17 @@ Target must specify exactly one of:
 - `{"channel": "general"}` - Post to channel (# optional)
 - `{"roomId": "ABC123"}` - Post to room ID
 
+## Generators
+
+Response generation is configurable per bot via `BOTn_GENERATOR_TYPE`.
+
+- `webhook` (default): POST to a streaming webhook and parse the response
+- `opencode`: planned (OpenCode server)
+
 ## Parsers
 
-Built-in: n8n streaming webhooks. Implement `StreamParser` for other formats:
+Parsers are used by the `webhook` generator. Built-in: n8n streaming webhooks.
+Implement `StreamParser` for other webhook formats:
 
 ```go
 type StreamParser interface {

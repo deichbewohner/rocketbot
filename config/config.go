@@ -14,10 +14,11 @@ type BotConfig struct {
 	URL            string
 	UserID         string
 	Token          string
+	GeneratorType  string // Response generator type (e.g., "webhook", "opencode")
 	WebhookURL     string
 	WebhookAuth    string
 	StreamedOutput bool
-	ParserType     string // Stream parser type (e.g., "n8n", "sse", "openai")
+	ParserType     string // Stream parser type for webhook generator (e.g., "n8n")
 	APIToken       string // HTTP API authentication token
 	ThreadDefault  bool   // Always reply in threads (default: false)
 	StatusMessage  string // Custom status message (optional, defaults to "Bot is active")
@@ -69,6 +70,7 @@ func Load() (*Config, error) {
 		webhookAuth := os.Getenv(prefix + "WEBHOOK_AUTH")
 		streamedOutput := os.Getenv(prefix + "STREAMED_OUTPUT")
 		parserType := os.Getenv(prefix + "PARSER_TYPE")
+		generatorType := os.Getenv(prefix + "GENERATOR_TYPE")
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
 		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
@@ -100,9 +102,60 @@ func Load() (*Config, error) {
 		// Normalize URL (remove trailing slash)
 		url = strings.TrimSuffix(url, "/")
 
-		// Validate parser type is specified
-		if parserType == "" {
-			return nil, fmt.Errorf("%sPARSER_TYPE is required", prefix)
+		// Generator type selection (default: webhook)
+		if generatorType == "" {
+			generatorType = "webhook"
+		}
+		switch generatorType {
+		case "webhook":
+			// Webhook generator requires webhook URL and a parser
+			if webhookURL == "" {
+				return nil, fmt.Errorf(
+					"%sWEBHOOK_URL is required when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+			if parserType == "" {
+				return nil, fmt.Errorf(
+					"%sPARSER_TYPE is required when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+			if parserType != "n8n" {
+				return nil, fmt.Errorf(
+					"%sPARSER_TYPE must be %q (got %q)",
+					prefix,
+					"n8n",
+					parserType,
+				)
+			}
+		case "opencode":
+			// OpenCode generator must not mix with webhook-only config.
+			if parserType != "" {
+				return nil, fmt.Errorf(
+					"%sPARSER_TYPE must not be set when %sGENERATOR_TYPE=opencode",
+					prefix,
+					prefix,
+				)
+			}
+			if webhookURL != "" {
+				return nil, fmt.Errorf(
+					"%sWEBHOOK_URL must not be set when %sGENERATOR_TYPE=opencode",
+					prefix,
+					prefix,
+				)
+			}
+			if webhookAuth != "" {
+				return nil, fmt.Errorf(
+					"%sWEBHOOK_AUTH must not be set when %sGENERATOR_TYPE=opencode",
+					prefix,
+					prefix,
+				)
+			}
+		default:
+			return nil, fmt.Errorf("%sGENERATOR_TYPE unknown: %q", prefix, generatorType)
 		}
 
 		// Parse streamed output (default: true - enables live message updates as responses are generated)
@@ -122,6 +175,7 @@ func Load() (*Config, error) {
 			URL:            url,
 			UserID:         userID,
 			Token:          token,
+			GeneratorType:  generatorType,
 			WebhookURL:     webhookURL,
 			WebhookAuth:    webhookAuth,
 			StreamedOutput: enableStreamedOutput,
