@@ -10,18 +10,21 @@ import (
 
 // BotConfig holds configuration for a single bot instance
 type BotConfig struct {
-	Slug           string // URL-safe identifier used in HTTP API endpoints
-	URL            string
-	UserID         string
-	Token          string
-	GeneratorType  string // Response generator type (e.g., "webhook", "opencode")
-	WebhookURL     string
-	WebhookAuth    string
-	StreamedOutput bool
-	ParserType     string // Stream parser type for webhook generator (e.g., "n8n")
-	APIToken       string // HTTP API authentication token
-	ThreadDefault  bool   // Always reply in threads (default: false)
-	StatusMessage  string // Custom status message (optional, defaults to "Bot is active")
+	Slug                   string // URL-safe identifier used in HTTP API endpoints
+	URL                    string
+	UserID                 string
+	Token                  string
+	GeneratorType          string // Response generator type (e.g., "webhook", "opencode")
+	OpenCodeBaseURL        string // OpenCode server base URL (GENERATOR_TYPE=opencode)
+	OpenCodeAuth           string // Optional Authorization header (GENERATOR_TYPE=opencode)
+	OpenCodePermissionMode string // Permission auto-reply mode (GENERATOR_TYPE=opencode)
+	WebhookURL             string
+	WebhookAuth            string
+	StreamedOutput         bool
+	ParserType             string // Stream parser type for webhook generator (e.g., "n8n")
+	APIToken               string // HTTP API authentication token
+	ThreadDefault          bool   // Always reply in threads (default: false)
+	StatusMessage          string // Custom status message (optional, defaults to "Bot is active")
 }
 
 // Config holds all bot configurations
@@ -71,6 +74,9 @@ func Load() (*Config, error) {
 		streamedOutput := os.Getenv(prefix + "STREAMED_OUTPUT")
 		parserType := os.Getenv(prefix + "PARSER_TYPE")
 		generatorType := os.Getenv(prefix + "GENERATOR_TYPE")
+		opencodeBaseURL := os.Getenv(prefix + "OPENCODE_BASE_URL")
+		opencodeAuth := os.Getenv(prefix + "OPENCODE_AUTH")
+		opencodePermissionMode := os.Getenv(prefix + "OPENCODE_PERMISSION_MODE")
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
 		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
@@ -108,6 +114,28 @@ func Load() (*Config, error) {
 		}
 		switch generatorType {
 		case "webhook":
+			if opencodeBaseURL != "" {
+				return nil, fmt.Errorf(
+					"%sOPENCODE_BASE_URL must not be set when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+			if opencodeAuth != "" {
+				return nil, fmt.Errorf(
+					"%sOPENCODE_AUTH must not be set when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+			if opencodePermissionMode != "" {
+				return nil, fmt.Errorf(
+					"%sOPENCODE_PERMISSION_MODE must not be set when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+
 			// Webhook generator requires webhook URL and a parser
 			if webhookURL == "" {
 				return nil, fmt.Errorf(
@@ -132,6 +160,28 @@ func Load() (*Config, error) {
 				)
 			}
 		case "opencode":
+			// Default OpenCode base URL if unset.
+			if opencodeBaseURL == "" {
+				opencodeBaseURL = "http://127.0.0.1:4096"
+			}
+			opencodeBaseURL = strings.TrimSuffix(opencodeBaseURL, "/")
+
+			// Permission auto-reply mode (default: deny)
+			if opencodePermissionMode == "" {
+				opencodePermissionMode = "deny"
+			}
+			switch opencodePermissionMode {
+			case "allow", "deny":
+			default:
+				return nil, fmt.Errorf(
+					"%sOPENCODE_PERMISSION_MODE must be %q or %q (got %q)",
+					prefix,
+					"allow",
+					"deny",
+					opencodePermissionMode,
+				)
+			}
+
 			// OpenCode generator must not mix with webhook-only config.
 			if parserType != "" {
 				return nil, fmt.Errorf(
@@ -171,18 +221,21 @@ func Load() (*Config, error) {
 		}
 
 		cfg.Bots = append(cfg.Bots, BotConfig{
-			Slug:           slug,
-			URL:            url,
-			UserID:         userID,
-			Token:          token,
-			GeneratorType:  generatorType,
-			WebhookURL:     webhookURL,
-			WebhookAuth:    webhookAuth,
-			StreamedOutput: enableStreamedOutput,
-			ParserType:     parserType,
-			APIToken:       apiToken,
-			ThreadDefault:  enableThreadDefault,
-			StatusMessage:  statusMessage,
+			Slug:                   slug,
+			URL:                    url,
+			UserID:                 userID,
+			Token:                  token,
+			GeneratorType:          generatorType,
+			OpenCodeBaseURL:        opencodeBaseURL,
+			OpenCodeAuth:           opencodeAuth,
+			OpenCodePermissionMode: opencodePermissionMode,
+			WebhookURL:             webhookURL,
+			WebhookAuth:            webhookAuth,
+			StreamedOutput:         enableStreamedOutput,
+			ParserType:             parserType,
+			APIToken:               apiToken,
+			ThreadDefault:          enableThreadDefault,
+			StatusMessage:          statusMessage,
 		})
 	}
 

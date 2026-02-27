@@ -643,6 +643,10 @@ func (c *Client) handleStreamingResponse(
 	history []Message,
 	sg StreamingGenerator,
 ) {
+	const noChunkNoticeAfter = 10 * time.Second
+	const noChunkNoticeEvery = 20 * time.Second
+	const noResponseText = "_No response produced._"
+
 	// Determine thread ID: use /thread command logic or threadDefault config
 	threadID := message.ThreadID
 	if shouldCreateThread(message, c.threadDefault) {
@@ -670,6 +674,8 @@ func (c *Client) handleStreamingResponse(
 	// Buffer for accumulating chunks
 	var buffer strings.Builder
 	lastSent := ""
+	lastChunkAt := time.Now()
+	nextNoChunkNoticeAt := lastChunkAt.Add(noChunkNoticeAfter)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -680,6 +686,13 @@ func (c *Client) handleStreamingResponse(
 			if !ok {
 				// Stream finished - do final update
 				final := buffer.String()
+				if final == "" && lastSent != "" {
+					// We may have sent a "still working" placeholder; replace it.
+					if err := c.api.UpdateMessage(ctx, message.RoomID, msgID, noResponseText); err != nil {
+						c.logger.ErrorContext(ctx, "error updating final message", "error", err)
+					}
+					return
+				}
 				if final != lastSent && final != "" {
 					if err := c.api.UpdateMessage(ctx, message.RoomID, msgID, final); err != nil {
 						c.logger.ErrorContext(ctx, "error updating final message", "error", err)
@@ -690,10 +703,29 @@ func (c *Client) handleStreamingResponse(
 				return
 			}
 			buffer.WriteString(chunk)
+			lastChunkAt = time.Now()
+			nextNoChunkNoticeAt = lastChunkAt.Add(noChunkNoticeAfter)
 
 		case <-ticker.C:
 			// Update if buffer has changed
 			current := buffer.String()
+			if current == "" {
+				elapsed := time.Since(lastChunkAt)
+				if elapsed >= noChunkNoticeAfter && time.Now().After(nextNoChunkNoticeAt) {
+					noticeText := fmt.Sprintf(
+						"_Still working... (%ds)_",
+						int(elapsed.Round(time.Second).Seconds()),
+					)
+					if err := c.api.UpdateMessage(ctx, message.RoomID, msgID, noticeText); err != nil {
+						c.logger.ErrorContext(ctx, "error updating message", "error", err)
+					} else {
+						c.logger.DebugContext(ctx, "message updated (no chunks yet)", "elapsed", elapsed)
+						lastSent = noticeText
+						nextNoChunkNoticeAt = time.Now().Add(noChunkNoticeEvery)
+					}
+					continue
+				}
+			}
 			if current != lastSent && current != "" {
 				if err := c.api.UpdateMessage(ctx, message.RoomID, msgID, current); err != nil {
 					c.logger.ErrorContext(ctx, "error updating message", "error", err)

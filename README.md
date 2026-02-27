@@ -53,6 +53,14 @@ vim .env
 ( set -a; . .env; set +a; go run ./cmd/rocketbot )
 ```
 
+## Debugging
+
+Enable verbose logs from rocketbot:
+
+```bash
+LOG_LEVEL=DEBUG
+```
+
 ## Security
 
 - Not internet-facing. Do not expose the HTTP API publicly.
@@ -88,7 +96,11 @@ Target must specify exactly one of:
 Response generation is configurable per bot via `BOTn_GENERATOR_TYPE`.
 
 - `webhook` (default): POST to a streaming webhook and parse the response
-- `opencode`: planned (OpenCode server)
+- `opencode`: OpenCode server (HTTP API + SSE)
+
+For `opencode`, permission prompts can be auto-handled with:
+
+- `BOTn_OPENCODE_PERMISSION_MODE=allow|deny` (default: `deny`)
 
 ## Parsers
 

@@ -100,8 +100,20 @@ func newGenerator(
 	case "webhook":
 		return newWebhookGenerator(botCfg, httpClient, logger)
 	case "opencode":
-		logger.Info("using opencode generator", "streamed_output", botCfg.StreamedOutput)
-		return bot.NewOpenCodeGenerator(httpClient, logger), nil
+		logger.Info(
+			"using opencode generator",
+			"base_url",
+			botCfg.OpenCodeBaseURL,
+			"streamed_output",
+			botCfg.StreamedOutput,
+		)
+		return bot.NewOpenCodeGenerator(
+			botCfg.OpenCodeBaseURL,
+			botCfg.OpenCodeAuth,
+			botCfg.OpenCodePermissionMode,
+			httpClient,
+			logger,
+		), nil
 	default:
 		return nil, fmt.Errorf("unknown generator type %q", botCfg.GeneratorType)
 	}

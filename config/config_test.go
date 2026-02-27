@@ -200,11 +200,53 @@ func TestLoad_OpenCodeGenerator_Succeeds(t *testing.T) {
 	if bot.GeneratorType != "opencode" {
 		t.Errorf("GeneratorType = %q, want %q", bot.GeneratorType, "opencode")
 	}
+	if bot.OpenCodeBaseURL != "http://127.0.0.1:4096" {
+		t.Errorf("OpenCodeBaseURL = %q, want default", bot.OpenCodeBaseURL)
+	}
+	if bot.OpenCodePermissionMode != "deny" {
+		t.Errorf("OpenCodePermissionMode = %q, want default", bot.OpenCodePermissionMode)
+	}
 	if bot.ParserType != "" {
 		t.Errorf("ParserType = %q, want empty", bot.ParserType)
 	}
 	if bot.WebhookURL != "" {
 		t.Errorf("WebhookURL = %q, want empty", bot.WebhookURL)
+	}
+}
+
+func TestLoad_OpenCodeGenerator_PermissionModeValidation(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_OPENCODE_PERMISSION_MODE", "nope")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "OPENCODE_PERMISSION_MODE") {
+		t.Fatalf("Load() error = %v, want permission mode error", err)
+	}
+}
+
+func TestLoad_WebhookGenerator_RejectsOpenCodeVars(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT1_OPENCODE_BASE_URL", "http://127.0.0.1:4096")
+	t.Setenv("BOT1_OPENCODE_PERMISSION_MODE", "allow")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "OPENCODE_BASE_URL must not be set") {
+		t.Fatalf("Load() error = %v, want opencode vars forbidden error", err)
 	}
 }
 
