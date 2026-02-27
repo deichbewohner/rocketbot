@@ -53,3 +53,9 @@ type StreamingGenerator interface {
 		history []Message,
 	) (<-chan string, error)
 }
+
+// HistoryAwareGenerator can hint how much Rocket.Chat history it needs.
+// Returning 0 means no history fetch is needed for the current message.
+type HistoryAwareGenerator interface {
+	HistoryLimit(message Message) int
+}

@@ -102,6 +102,9 @@ For `opencode`, permission prompts can be auto-handled with:
 
 - `BOTn_OPENCODE_PERMISSION_MODE=allow|deny` (default: `deny`)
 
+OpenCode sessions are reused in-memory per conversation (`room` or `room+thread`).
+History is sent only when bootstrapping a new OpenCode session.
+
 ## Parsers
 
 Parsers are used by the `webhook` generator. Built-in: n8n streaming webhooks.

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,6 +31,35 @@ type OpenCodeGenerator struct {
 	permissionMode string
 	client         *http.Client
 	logger         *slog.Logger
+
+	conversationsMu sync.Mutex
+	conversations   map[string]*openCodeConversation
+}
+
+type openCodeConversation struct {
+	promptMu  sync.Mutex
+	sessionMu sync.RWMutex
+	sessionID string
+}
+
+func (c *openCodeConversation) getSessionID() string {
+	c.sessionMu.RLock()
+	defer c.sessionMu.RUnlock()
+	return c.sessionID
+}
+
+func (c *openCodeConversation) setSessionID(sessionID string) {
+	c.sessionMu.Lock()
+	c.sessionID = sessionID
+	c.sessionMu.Unlock()
+}
+
+func (c *openCodeConversation) clearSessionIDIfMatch(sessionID string) {
+	c.sessionMu.Lock()
+	if c.sessionID == sessionID {
+		c.sessionID = ""
+	}
+	c.sessionMu.Unlock()
 }
 
 func NewOpenCodeGenerator(
@@ -65,7 +95,15 @@ func NewOpenCodeGenerator(
 		permissionMode: permissionMode,
 		client:         client,
 		logger:         logger,
+		conversations:  make(map[string]*openCodeConversation),
 	}
+}
+
+func (g *OpenCodeGenerator) HistoryLimit(message Message) int {
+	if g.hasSession(message) {
+		return 0
+	}
+	return 10
 }
 
 func (g *OpenCodeGenerator) GenerateResponse(
@@ -94,31 +132,84 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 	}
 
 	start := time.Now()
-	sessionTitle := titleForMessage(message.Text)
+	conversationKey := openCodeConversationKey(message)
+	conv := g.conversation(conversationKey)
 	g.logger.DebugContext(
 		ctx,
-		"opencode: creating session",
-		"base_url",
-		g.baseURL,
-		"title",
-		sessionTitle,
+		"opencode: waiting for conversation prompt lock",
+		"conversation_key",
+		conversationKey,
 	)
-	sessionID, err := g.createSession(ctx, sessionTitle)
-	if err != nil {
-		return nil, err
+	lockStart := time.Now()
+	conv.promptMu.Lock()
+	g.logger.DebugContext(
+		ctx,
+		"opencode: acquired conversation prompt lock",
+		"conversation_key",
+		conversationKey,
+		"wait",
+		time.Since(lockStart),
+	)
+	var unlockOnce sync.Once
+	unlockConv := func() {
+		unlockOnce.Do(func() {
+			g.logger.DebugContext(
+				ctx,
+				"opencode: released conversation prompt lock",
+				"conversation_key",
+				conversationKey,
+			)
+			conv.promptMu.Unlock()
+		})
 	}
-	g.logger.DebugContext(
-		ctx,
-		"opencode: session created",
-		"session_id",
-		sessionID,
-		"took",
-		time.Since(start),
-	)
+
+	sessionID := conv.getSessionID()
+	includeHistory := false
+	if sessionID == "" {
+		sessionTitle := titleForMessage(message.Text)
+		g.logger.DebugContext(
+			ctx,
+			"opencode: creating session",
+			"base_url",
+			g.baseURL,
+			"title",
+			sessionTitle,
+			"conversation_key",
+			conversationKey,
+		)
+		var err error
+		sessionID, err = g.createSession(ctx, sessionTitle)
+		if err != nil {
+			unlockConv()
+			return nil, err
+		}
+		conv.setSessionID(sessionID)
+		includeHistory = true
+		g.logger.DebugContext(
+			ctx,
+			"opencode: session created",
+			"session_id",
+			sessionID,
+			"conversation_key",
+			conversationKey,
+			"took",
+			time.Since(start),
+		)
+	} else {
+		g.logger.DebugContext(
+			ctx,
+			"opencode: reusing session",
+			"session_id",
+			sessionID,
+			"conversation_key",
+			conversationKey,
+		)
+	}
 
 	g.logger.DebugContext(ctx, "opencode: opening event stream", "session_id", sessionID)
 	resp, err := g.openEventStream(ctx)
 	if err != nil {
+		unlockConv()
 		return nil, err
 	}
 	g.logger.DebugContext(ctx, "opencode: event stream opened", "session_id", sessionID)
@@ -137,9 +228,9 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		defer close(done)
 		defer close(outCh)
 		defer cancel()
+		defer unlockConv()
 		defer func() {
-			// Drain and close to allow keep-alive reuse.
-			_, _ = io.Copy(io.Discard, resp.Body)
+			// Event stream can stay open indefinitely; close directly.
 			if err := resp.Body.Close(); err != nil {
 				g.logger.Warn("failed to close opencode event stream", "error", err)
 			}
@@ -152,26 +243,49 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		}
 	}()
 
-	prompt := buildPrompt(message, history)
+	prompt := buildPrompt(message, history, includeHistory)
 	g.logger.DebugContext(
 		ctx,
 		"opencode: posting prompt_async",
 		"session_id",
 		sessionID,
+		"conversation_key",
+		conversationKey,
+		"include_history",
+		includeHistory,
 		"prompt_len",
 		len(prompt),
 	)
 	if err := g.promptAsync(ctx, sessionID, prompt); err != nil {
+		conv.clearSessionIDIfMatch(sessionID)
 		cancel()
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
+			unlockConv()
 		}
 		return nil, err
 	}
 	g.logger.DebugContext(ctx, "opencode: prompt_async accepted", "session_id", sessionID)
 
 	return outCh, nil
+}
+
+func (g *OpenCodeGenerator) hasSession(message Message) bool {
+	key := openCodeConversationKey(message)
+	conv := g.conversation(key)
+	return conv.getSessionID() != ""
+}
+
+func (g *OpenCodeGenerator) conversation(key string) *openCodeConversation {
+	g.conversationsMu.Lock()
+	defer g.conversationsMu.Unlock()
+	if conv, ok := g.conversations[key]; ok {
+		return conv
+	}
+	conv := &openCodeConversation{}
+	g.conversations[key] = conv
+	return conv
 }
 
 type openCodeStreamState struct {
@@ -495,10 +609,10 @@ func titleForMessage(text string) string {
 	return text
 }
 
-func buildPrompt(message Message, history []Message) string {
-	// Keep it simple and deterministic; OpenCode sessions are per message for now.
+func buildPrompt(message Message, history []Message, includeHistory bool) string {
+	// Keep it simple and deterministic; only include history when bootstrapping a session.
 	var b strings.Builder
-	if len(history) > 0 {
+	if includeHistory && len(history) > 0 {
 		b.WriteString("Conversation history (oldest first):\n")
 		for _, m := range history {
 			role := "user"
@@ -523,6 +637,13 @@ func buildPrompt(message Message, history []Message) string {
 	}
 	b.WriteString(strings.TrimSpace(message.Text))
 	return b.String()
+}
+
+func openCodeConversationKey(message Message) string {
+	if message.ThreadID != "" {
+		return "thread:" + message.RoomID + ":" + message.ThreadID
+	}
+	return "room:" + message.RoomID
 }
 
 func eventTypeAndSessionID(payload string) (typ string, sessionID string) {
@@ -746,4 +867,7 @@ func (g *OpenCodeGenerator) replyPermission(
 	return nil
 }
 
-var _ StreamingGenerator = (*OpenCodeGenerator)(nil)
+var (
+	_ StreamingGenerator    = (*OpenCodeGenerator)(nil)
+	_ HistoryAwareGenerator = (*OpenCodeGenerator)(nil)
+)

@@ -60,3 +60,73 @@ func TestOpenCodeGenerator_ConsumeEvents_EmitsAssistantTextOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPrompt_IncludeHistoryToggle(t *testing.T) {
+	message := Message{
+		Text: "What now?",
+		User: MessageUser{Username: "alice"},
+	}
+	history := []Message{
+		{Text: "Hello", User: MessageUser{Username: "bob"}},
+	}
+
+	withHistory := buildPrompt(message, history, true)
+	if !strings.Contains(withHistory, "Conversation history (oldest first):") {
+		t.Fatalf("expected history header in prompt: %q", withHistory)
+	}
+	if !strings.Contains(withHistory, "- bob: Hello") {
+		t.Fatalf("expected history content in prompt: %q", withHistory)
+	}
+
+	withoutHistory := buildPrompt(message, history, false)
+	if strings.Contains(withoutHistory, "Conversation history (oldest first):") {
+		t.Fatalf("did not expect history header in prompt: %q", withoutHistory)
+	}
+	if withoutHistory != "alice: What now?" {
+		t.Fatalf("prompt = %q, want %q", withoutHistory, "alice: What now?")
+	}
+}
+
+func TestOpenCodeGenerator_HistoryLimit_TracksSessionBootstrap(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+
+	msg := Message{RoomID: "room1", ThreadID: "thread1"}
+	if got := g.HistoryLimit(msg); got != 10 {
+		t.Fatalf("HistoryLimit() = %d, want 10 before session", got)
+	}
+
+	key := openCodeConversationKey(msg)
+	conv := g.conversation(key)
+	conv.setSessionID("session-123")
+
+	if got := g.HistoryLimit(msg); got != 0 {
+		t.Fatalf("HistoryLimit() = %d, want 0 after session", got)
+	}
+}
+
+func TestOpenCodeGenerator_HistoryLimit_DoesNotBlockOnPromptLock(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+
+	msg := Message{RoomID: "room1", ThreadID: "thread1"}
+	conv := g.conversation(openCodeConversationKey(msg))
+	conv.setSessionID("session-123")
+
+	conv.promptMu.Lock()
+	defer conv.promptMu.Unlock()
+
+	done := make(chan int, 1)
+	go func() {
+		done <- g.HistoryLimit(msg)
+	}()
+
+	select {
+	case got := <-done:
+		if got != 0 {
+			t.Fatalf("HistoryLimit() = %d, want 0", got)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("HistoryLimit() blocked while prompt lock was held")
+	}
+}

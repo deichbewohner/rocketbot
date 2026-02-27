@@ -553,14 +553,42 @@ func (c *Client) handleDMResponse(message Message) {
 		c.logger.InfoContext(ctx, "received dm", "room_id", message.RoomID, "user", message.User.Username)
 	}
 
-	// Fetch conversation history based on whether this is a thread
+	// Determine thread target once so history fetch, context keying, and replies align.
+	effectiveThreadID := message.ThreadID
+	if shouldCreateThread(message, c.threadDefault) {
+		effectiveThreadID = message.ID
+	}
+
+	messageForGenerator := message
+	messageForGenerator.ThreadID = effectiveThreadID
+
+	historyLimit := 10
+	if hg, ok := c.generator.(HistoryAwareGenerator); ok {
+		if limit := hg.HistoryLimit(messageForGenerator); limit >= 0 {
+			historyLimit = limit
+		}
+	}
+	c.logger.DebugContext(
+		ctx,
+		"history strategy selected",
+		"room_id",
+		message.RoomID,
+		"thread_id",
+		effectiveThreadID,
+		"history_limit",
+		historyLimit,
+	)
+
+	// Fetch conversation history only when requested by generator.
 	var history []Message
-	if message.ThreadID != "" {
-		// Fetch thread messages
-		history = c.api.FetchThreadHistory(ctx, message.ThreadID, 10)
-	} else {
-		// Fetch room messages
-		history = c.api.FetchHistory(ctx, message.RoomID, 10)
+	if historyLimit > 0 {
+		if effectiveThreadID != "" {
+			// Fetch thread messages
+			history = c.api.FetchThreadHistory(ctx, effectiveThreadID, historyLimit)
+		} else {
+			// Fetch room messages
+			history = c.api.FetchHistory(ctx, message.RoomID, historyLimit)
+		}
 	}
 
 	// Remove current message if it appears in history
@@ -582,7 +610,7 @@ func (c *Client) handleDMResponse(message Message) {
 	if c.streamedOutput {
 		if sg, ok := c.generator.(StreamingGenerator); ok {
 			c.logger.DebugContext(ctx, "using streaming response mode")
-			c.handleStreamingResponse(ctx, message, filteredHistory, sg)
+			c.handleStreamingResponse(ctx, messageForGenerator, filteredHistory, sg)
 			return
 		}
 	}
@@ -594,7 +622,7 @@ func (c *Client) handleDMResponse(message Message) {
 		"streamed_output_enabled",
 		c.streamedOutput,
 	)
-	c.handleNonStreamingResponse(ctx, message, filteredHistory)
+	c.handleNonStreamingResponse(ctx, messageForGenerator, filteredHistory)
 }
 
 // handleNonStreamingResponse handles the traditional non-streaming response
@@ -665,11 +693,13 @@ func (c *Client) handleStreamingResponse(
 	ctx = context.WithValue(ctx, ReplyRoomIDKey, message.RoomID)
 
 	// Start streaming
+	c.logger.DebugContext(ctx, "starting generator stream")
 	chunkCh, err := sg.GenerateResponseStream(ctx, message, history)
 	if err != nil {
 		c.logger.ErrorContext(ctx, "error starting stream", "error", err)
 		return
 	}
+	c.logger.DebugContext(ctx, "generator stream started")
 
 	// Buffer for accumulating chunks
 	var buffer strings.Builder
