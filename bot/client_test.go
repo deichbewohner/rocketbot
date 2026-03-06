@@ -321,6 +321,33 @@ func TestShouldCreateThread(t *testing.T) {
 	}
 }
 
+func TestParseBotCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want botCommand
+		ok   bool
+	}{
+		{name: "reset", text: "!rb reset", want: botCommandReset, ok: true},
+		{name: "reset uppercase", text: "!RB RESET", want: botCommandReset, ok: true},
+		{name: "reset with args", text: "!rb reset now", want: botCommandReset, ok: true},
+		{name: "unknown", text: "!rb foo", ok: false},
+		{name: "missing prefix", text: "reset", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := parseBotCommand(tt.text)
+			if ok != tt.ok {
+				t.Fatalf("parseBotCommand() ok = %v, want %v", ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Fatalf("parseBotCommand() command = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseAPIMessages_Ordering(t *testing.T) {
 	now := time.Now()
 
@@ -397,6 +424,92 @@ func (m *mockResponseGenerator) GenerateResponse(
 	history []Message,
 ) (string, error) {
 	return m.response, m.err
+}
+
+type mockResettableGenerator struct {
+	mockResponseGenerator
+	resetErr    error
+	resetCalled bool
+}
+
+func (m *mockResettableGenerator) ResetSession(ctx context.Context, message Message) error {
+	m.resetCalled = true
+	return m.resetErr
+}
+
+func TestClient_HandleDMResponse_ResetCommand(t *testing.T) {
+	tests := []struct {
+		name              string
+		generator         ResponseGenerator
+		expectResetCalled bool
+		expectReply       string
+	}{
+		{
+			name:              "supported and successful",
+			generator:         &mockResettableGenerator{},
+			expectResetCalled: true,
+			expectReply:       "Session reset. Starting fresh.",
+		},
+		{
+			name:              "supported and failing",
+			generator:         &mockResettableGenerator{resetErr: errors.New("boom")},
+			expectResetCalled: true,
+			expectReply:       "Reset failed. Please try again.",
+		},
+		{
+			name:              "unsupported generator",
+			generator:         &mockResponseGenerator{},
+			expectResetCalled: false,
+			expectReply:       "Session reset is not supported for this bot.",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var postedText string
+			postCalls := 0
+			rt := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				if !strings.Contains(r.URL.Path, "/api/v1/chat.postMessage") {
+					t.Fatalf("unexpected request path: %s", r.URL.Path)
+				}
+				postCalls++
+				var payload map[string]interface{}
+				_ = json.NewDecoder(r.Body).Decode(&payload)
+				postedText, _ = payload["text"].(string)
+
+				resp := map[string]interface{}{
+					"message": map[string]interface{}{"_id": "cmd-reply-id"},
+					"success": true,
+				}
+				body, _ := json.Marshal(resp)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(body)),
+				}, nil
+			})
+
+			logger := testutil.NewTestLogger(t)
+			httpClient := &http.Client{Transport: rt}
+			apiClient := NewAPIClient("https://test.com", "user", "token", httpClient, logger)
+
+			client := &Client{api: apiClient, generator: tt.generator, logger: logger}
+			msg := Message{RoomID: "room1", Text: "!rb reset", User: MessageUser{Username: "alice"}}
+			client.handleDMResponse(msg)
+
+			if postCalls != 1 {
+				t.Fatalf("post calls = %d, want 1", postCalls)
+			}
+			if postedText != tt.expectReply {
+				t.Fatalf("posted text = %q, want %q", postedText, tt.expectReply)
+			}
+
+			if rg, ok := tt.generator.(*mockResettableGenerator); ok {
+				if rg.resetCalled != tt.expectResetCalled {
+					t.Fatalf("resetCalled = %v, want %v", rg.resetCalled, tt.expectResetCalled)
+				}
+			}
+		})
+	}
 }
 
 func TestClient_HandleRoomMessage_IgnoreOwnMessages(t *testing.T) {

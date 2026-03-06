@@ -59,3 +59,9 @@ type StreamingGenerator interface {
 type HistoryAwareGenerator interface {
 	HistoryLimit(message Message) int
 }
+
+// SessionResetter is an optional interface for generators that can reset
+// conversation session state for a given message context.
+type SessionResetter interface {
+	ResetSession(ctx context.Context, message Message) error
+}

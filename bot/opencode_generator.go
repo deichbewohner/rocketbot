@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,10 @@ type openCodeConversation struct {
 	promptMu  sync.Mutex
 	sessionMu sync.RWMutex
 	sessionID string
+
+	activeMu      sync.Mutex
+	activeCancel  context.CancelFunc
+	activeCancelN uint64
 }
 
 func (c *openCodeConversation) getSessionID() string {
@@ -60,6 +65,33 @@ func (c *openCodeConversation) clearSessionIDIfMatch(sessionID string) {
 		c.sessionID = ""
 	}
 	c.sessionMu.Unlock()
+}
+
+func (c *openCodeConversation) setActiveCancel(cancel context.CancelFunc) uint64 {
+	c.activeMu.Lock()
+	c.activeCancelN++
+	seq := c.activeCancelN
+	c.activeCancel = cancel
+	c.activeMu.Unlock()
+	return seq
+}
+
+func (c *openCodeConversation) clearActiveCancel(seq uint64) {
+	c.activeMu.Lock()
+	if c.activeCancelN == seq {
+		c.activeCancel = nil
+	}
+	c.activeMu.Unlock()
+}
+
+func (c *openCodeConversation) cancelActive() {
+	c.activeMu.Lock()
+	cancel := c.activeCancel
+	c.activeCancel = nil
+	c.activeMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func NewOpenCodeGenerator(
@@ -104,6 +136,44 @@ func (g *OpenCodeGenerator) HistoryLimit(message Message) int {
 		return 0
 	}
 	return 10
+}
+
+func (g *OpenCodeGenerator) ResetSession(ctx context.Context, message Message) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	conversationKey := openCodeConversationKey(message)
+	conv := g.conversation(conversationKey)
+	sessionID := conv.getSessionID()
+	conv.setSessionID("")
+	conv.cancelActive()
+
+	if sessionID == "" {
+		g.logger.InfoContext(
+			ctx,
+			"opencode: session reset requested with no active session",
+			"conversation_key",
+			conversationKey,
+		)
+		return nil
+	}
+
+	g.logger.InfoContext(
+		ctx,
+		"opencode: resetting session",
+		"conversation_key",
+		conversationKey,
+		"session_id",
+		sessionID,
+	)
+
+	cleanupCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	if err := g.abortAndDeleteSessionTree(cleanupCtx, sessionID); err != nil {
+		return fmt.Errorf("reset session %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 func (g *OpenCodeGenerator) GenerateResponse(
@@ -217,6 +287,7 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		outCh := make(chan string, 10)
 		done := make(chan struct{})
 		streamCtx, cancel := context.WithCancel(ctx)
+		cancelSeq := conv.setActiveCancel(cancel)
 
 		state := &openCodeStreamState{
 			assistantMsgIDs: make(map[string]struct{}),
@@ -228,6 +299,7 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 			defer close(done)
 			defer close(outCh)
 			defer cancel()
+			defer conv.clearActiveCancel(cancelSeq)
 			defer unlockConv()
 			defer func() {
 				// Event stream can stay open indefinitely; close directly.
@@ -314,6 +386,292 @@ func (g *OpenCodeGenerator) hasSession(message Message) bool {
 	key := openCodeConversationKey(message)
 	conv := g.conversation(key)
 	return conv.getSessionID() != ""
+}
+
+func (g *OpenCodeGenerator) abortAndDeleteSessionTree(ctx context.Context, sessionID string) error {
+	ids, err := g.collectSessionTreeIDs(ctx, sessionID, map[string]struct{}{})
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, id := range ids {
+		if err := g.abortSession(ctx, id); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if err := g.waitForSessionNotBusy(ctx, sessionID, 2*time.Second); err != nil {
+		errs = append(errs, err)
+	}
+
+	for i := len(ids) - 1; i >= 0; i-- {
+		if err := g.deleteSession(ctx, ids[i]); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+	return nil
+}
+
+func (g *OpenCodeGenerator) collectSessionTreeIDs(
+	ctx context.Context,
+	sessionID string,
+	seen map[string]struct{},
+) ([]string, error) {
+	if _, ok := seen[sessionID]; ok {
+		return nil, nil
+	}
+	seen[sessionID] = struct{}{}
+
+	ids := []string{sessionID}
+	children, err := g.listChildSessions(ctx, sessionID)
+	if err != nil {
+		return ids, err
+	}
+	for _, childID := range children {
+		childIDs, err := g.collectSessionTreeIDs(ctx, childID, seen)
+		ids = append(ids, childIDs...)
+		if err != nil {
+			return ids, err
+		}
+	}
+	return ids, nil
+}
+
+func (g *OpenCodeGenerator) abortSession(ctx context.Context, sessionID string) error {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		g.baseURL+"/session/"+url.PathEscape(sessionID)+"/abort",
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	if g.auth != "" {
+		req.Header.Set("Authorization", g.auth)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return nil
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return &openCodeHTTPError{op: "session abort", status: resp.StatusCode, body: string(b)}
+}
+
+func (g *OpenCodeGenerator) deleteSession(ctx context.Context, sessionID string) error {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodDelete,
+		g.baseURL+"/session/"+url.PathEscape(sessionID),
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	if g.auth != "" {
+		req.Header.Set("Authorization", g.auth)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return nil
+	}
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	return &openCodeHTTPError{op: "session delete", status: resp.StatusCode, body: string(b)}
+}
+
+func (g *OpenCodeGenerator) listChildSessions(
+	ctx context.Context,
+	sessionID string,
+) ([]string, error) {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		g.baseURL+"/session/"+url.PathEscape(sessionID)+"/children",
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if g.auth != "" {
+		req.Header.Set("Authorization", g.auth)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &openCodeHTTPError{
+			op:     "session children",
+			status: resp.StatusCode,
+			body:   string(b),
+		}
+	}
+
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return nil, err
+	}
+	childSet := map[string]struct{}{}
+	collectSessionIDs(decoded, childSet)
+	delete(childSet, sessionID)
+	children := make([]string, 0, len(childSet))
+	for id := range childSet {
+		children = append(children, id)
+	}
+	return children, nil
+}
+
+func (g *OpenCodeGenerator) waitForSessionNotBusy(
+	ctx context.Context,
+	sessionID string,
+	maxWait time.Duration,
+) error {
+	if maxWait <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(maxWait)
+	for {
+		busy, known, err := g.sessionBusy(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if !known || !busy {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func (g *OpenCodeGenerator) sessionBusy(ctx context.Context, sessionID string) (bool, bool, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, g.baseURL+"/session/status", nil)
+	if err != nil {
+		return false, false, err
+	}
+	if g.auth != "" {
+		req.Header.Set("Authorization", g.auth)
+	}
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return false, false, err
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return false, false, &openCodeHTTPError{
+			op:     "session status",
+			status: resp.StatusCode,
+			body:   string(b),
+		}
+	}
+
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return false, false, err
+	}
+	status, ok := findSessionStatus(decoded, sessionID)
+	if !ok {
+		return false, false, nil
+	}
+	return strings.EqualFold(status, "busy"), true, nil
+}
+
+func collectSessionIDs(v any, out map[string]struct{}) {
+	switch x := v.(type) {
+	case map[string]any:
+		if id, ok := x["id"].(string); ok && id != "" {
+			out[id] = struct{}{}
+		}
+		for _, val := range x {
+			collectSessionIDs(val, out)
+		}
+	case []any:
+		for _, item := range x {
+			collectSessionIDs(item, out)
+		}
+	}
+}
+
+func findSessionStatus(v any, sessionID string) (string, bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		if id, ok := x["id"].(string); ok && id == sessionID {
+			if status, ok := x["status"].(string); ok {
+				return status, true
+			}
+		}
+		if statusVal, ok := x[sessionID]; ok {
+			switch s := statusVal.(type) {
+			case string:
+				return s, true
+			case map[string]any:
+				if status, ok := s["status"].(string); ok {
+					return status, true
+				}
+			}
+		}
+		for _, val := range x {
+			if status, ok := findSessionStatus(val, sessionID); ok {
+				return status, true
+			}
+		}
+	case []any:
+		for _, item := range x {
+			if status, ok := findSessionStatus(item, sessionID); ok {
+				return status, true
+			}
+		}
+	}
+	return "", false
 }
 
 func (g *OpenCodeGenerator) conversation(key string) *openCodeConversation {
@@ -940,4 +1298,5 @@ func (g *OpenCodeGenerator) replyPermission(
 var (
 	_ StreamingGenerator    = (*OpenCodeGenerator)(nil)
 	_ HistoryAwareGenerator = (*OpenCodeGenerator)(nil)
+	_ SessionResetter       = (*OpenCodeGenerator)(nil)
 )

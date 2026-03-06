@@ -553,6 +553,11 @@ func (c *Client) handleDMResponse(message Message) {
 		c.logger.InfoContext(ctx, "received dm", "room_id", message.RoomID, "user", message.User.Username)
 	}
 
+	if cmd, ok := parseBotCommand(message.Text); ok {
+		c.handleBotCommand(ctx, message, cmd)
+		return
+	}
+
 	// Determine thread target once so history fetch, context keying, and replies align.
 	effectiveThreadID := message.ThreadID
 	if shouldCreateThread(message, c.threadDefault) {
@@ -623,6 +628,60 @@ func (c *Client) handleDMResponse(message Message) {
 		c.streamedOutput,
 	)
 	c.handleNonStreamingResponse(ctx, messageForGenerator, filteredHistory)
+}
+
+type botCommand string
+
+const botCommandReset botCommand = "reset"
+
+func parseBotCommand(text string) (botCommand, bool) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 2 {
+		return "", false
+	}
+	if strings.ToLower(fields[0]) != "!rb" {
+		return "", false
+	}
+	switch strings.ToLower(fields[1]) {
+	case string(botCommandReset):
+		return botCommandReset, true
+	default:
+		return "", false
+	}
+}
+
+func (c *Client) handleBotCommand(ctx context.Context, message Message, cmd botCommand) {
+	threadID := message.ThreadID
+	respond := func(text string) {
+		if _, err := c.api.PostMessage(ctx, message.RoomID, text, threadID); err != nil {
+			c.logger.ErrorContext(
+				ctx,
+				"error posting command response",
+				"command",
+				string(cmd),
+				"error",
+				err,
+			)
+		}
+	}
+
+	if cmd != botCommandReset {
+		respond("Unknown command.")
+		return
+	}
+
+	resetter, ok := c.generator.(SessionResetter)
+	if !ok {
+		respond("Session reset is not supported for this bot.")
+		return
+	}
+
+	if err := resetter.ResetSession(ctx, message); err != nil {
+		c.logger.ErrorContext(ctx, "session reset failed", "error", err)
+		respond("Reset failed. Please try again.")
+		return
+	}
+	respond("Session reset. Starting fresh.")
 }
 
 // handleNonStreamingResponse handles the traditional non-streaming response

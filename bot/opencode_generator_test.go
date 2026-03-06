@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -320,5 +321,131 @@ func TestIsStaleSessionPromptError(t *testing.T) {
 				t.Fatalf("isStaleSessionPromptError() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestOpenCodeGenerator_ResetSession_AbortsAndDeletesSessionTree(t *testing.T) {
+	var mu sync.Mutex
+	aborts := make([]string, 0)
+	deletes := make([]string, 0)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session/parent/abort":
+			mu.Lock()
+			aborts = append(aborts, "parent")
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		case r.Method == http.MethodPost && r.URL.Path == "/session/child1/abort":
+			mu.Lock()
+			aborts = append(aborts, "child1")
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/session/parent/children":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"id":"child1"}]`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/session/child1/children":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/session/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"parent","status":"idle"}]}`))
+			return
+		case r.Method == http.MethodDelete && r.URL.Path == "/session/child1":
+			mu.Lock()
+			deletes = append(deletes, "child1")
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		case r.Method == http.MethodDelete && r.URL.Path == "/session/parent":
+			mu.Lock()
+			deletes = append(deletes, "parent")
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+
+	msg := Message{RoomID: "room1", User: MessageUser{Username: "alice"}}
+	conv := g.conversation(openCodeConversationKey(msg))
+	conv.setSessionID("parent")
+
+	if err := g.ResetSession(context.Background(), msg); err != nil {
+		t.Fatalf("ResetSession() error = %v", err)
+	}
+	if got := conv.getSessionID(); got != "" {
+		t.Fatalf("cached session id = %q, want empty", got)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(aborts) != 2 {
+		t.Fatalf("abort calls = %v, want parent and child1", aborts)
+	}
+	if len(deletes) != 2 {
+		t.Fatalf("delete calls = %v, want child1 then parent", deletes)
+	}
+	if deletes[0] != "child1" || deletes[1] != "parent" {
+		t.Fatalf("delete order = %v, want [child1 parent]", deletes)
+	}
+}
+
+func TestOpenCodeGenerator_ResetSession_CancelsActiveGeneration(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/session/parent/abort":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/session/parent/children":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+			return
+		case r.Method == http.MethodGet && r.URL.Path == "/session/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"parent","status":"idle"}]}`))
+			return
+		case r.Method == http.MethodDelete && r.URL.Path == "/session/parent":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+
+	msg := Message{RoomID: "room1"}
+	conv := g.conversation(openCodeConversationKey(msg))
+	conv.setSessionID("parent")
+
+	activeCtx, activeCancel := context.WithCancel(context.Background())
+	_ = conv.setActiveCancel(activeCancel)
+
+	if err := g.ResetSession(context.Background(), msg); err != nil {
+		t.Fatalf("ResetSession() error = %v", err)
+	}
+
+	select {
+	case <-activeCtx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected active context to be canceled")
 	}
 }
