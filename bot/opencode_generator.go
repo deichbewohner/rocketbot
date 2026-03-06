@@ -206,67 +206,106 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		)
 	}
 
-	g.logger.DebugContext(ctx, "opencode: opening event stream", "session_id", sessionID)
-	resp, err := g.openEventStream(ctx)
-	if err != nil {
-		unlockConv()
-		return nil, err
-	}
-	g.logger.DebugContext(ctx, "opencode: event stream opened", "session_id", sessionID)
+	postPromptWithStream := func(sessionID, prompt string) (<-chan string, error) {
+		g.logger.DebugContext(ctx, "opencode: opening event stream", "session_id", sessionID)
+		resp, err := g.openEventStream(ctx)
+		if err != nil {
+			return nil, err
+		}
+		g.logger.DebugContext(ctx, "opencode: event stream opened", "session_id", sessionID)
 
-	outCh := make(chan string, 10)
-	done := make(chan struct{})
-	streamCtx, cancel := context.WithCancel(ctx)
+		outCh := make(chan string, 10)
+		done := make(chan struct{})
+		streamCtx, cancel := context.WithCancel(ctx)
 
-	state := &openCodeStreamState{
-		assistantMsgIDs: make(map[string]struct{}),
-		partText:        make(map[string]string),
-		pendingParts:    make(map[string]openCodePendingPart),
-	}
+		state := &openCodeStreamState{
+			assistantMsgIDs: make(map[string]struct{}),
+			partText:        make(map[string]string),
+			pendingParts:    make(map[string]openCodePendingPart),
+		}
 
-	go func() {
-		defer close(done)
-		defer close(outCh)
-		defer cancel()
-		defer unlockConv()
-		defer func() {
-			// Event stream can stay open indefinitely; close directly.
-			if err := resp.Body.Close(); err != nil {
-				g.logger.Warn("failed to close opencode event stream", "error", err)
+		go func() {
+			defer close(done)
+			defer close(outCh)
+			defer cancel()
+			defer unlockConv()
+			defer func() {
+				// Event stream can stay open indefinitely; close directly.
+				if err := resp.Body.Close(); err != nil {
+					g.logger.Warn("failed to close opencode event stream", "error", err)
+				}
+			}()
+
+			if err := g.consumeEvents(streamCtx, resp.Body, sessionID, state, outCh); err != nil {
+				if !errors.Is(err, context.Canceled) {
+					g.logger.Error("opencode stream ended with error", "error", err)
+				}
 			}
 		}()
 
-		if err := g.consumeEvents(streamCtx, resp.Body, sessionID, state, outCh); err != nil {
-			if !errors.Is(err, context.Canceled) {
-				g.logger.Error("opencode stream ended with error", "error", err)
+		g.logger.DebugContext(
+			ctx,
+			"opencode: posting prompt_async",
+			"session_id",
+			sessionID,
+			"conversation_key",
+			conversationKey,
+			"include_history",
+			includeHistory,
+			"prompt_len",
+			len(prompt),
+		)
+		if err := g.promptAsync(ctx, sessionID, prompt); err != nil {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				unlockConv()
 			}
+			return nil, err
 		}
-	}()
+		g.logger.DebugContext(ctx, "opencode: prompt_async accepted", "session_id", sessionID)
+		return outCh, nil
+	}
 
 	prompt := buildPrompt(message, history, includeHistory)
-	g.logger.DebugContext(
+	outCh, err := postPromptWithStream(sessionID, prompt)
+	if err == nil {
+		return outCh, nil
+	}
+	if !isStaleSessionPromptError(err) {
+		unlockConv()
+		return nil, err
+	}
+
+	g.logger.WarnContext(
 		ctx,
-		"opencode: posting prompt_async",
+		"opencode: stale session detected, recreating and retrying",
 		"session_id",
 		sessionID,
 		"conversation_key",
 		conversationKey,
-		"include_history",
-		includeHistory,
-		"prompt_len",
-		len(prompt),
 	)
-	if err := g.promptAsync(ctx, sessionID, prompt); err != nil {
-		conv.clearSessionIDIfMatch(sessionID)
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			unlockConv()
+	conv.clearSessionIDIfMatch(sessionID)
+
+	sessionTitle := titleForMessage(message.Text)
+	newSessionID, createErr := g.createSession(ctx, sessionTitle)
+	if createErr != nil {
+		unlockConv()
+		return nil, createErr
+	}
+	conv.setSessionID(newSessionID)
+	includeHistory = true
+	retryPrompt := buildPrompt(message, history, includeHistory)
+
+	outCh, err = postPromptWithStream(newSessionID, retryPrompt)
+	if err != nil {
+		if isStaleSessionPromptError(err) {
+			conv.clearSessionIDIfMatch(newSessionID)
 		}
+		unlockConv()
 		return nil, err
 	}
-	g.logger.DebugContext(ctx, "opencode: prompt_async accepted", "session_id", sessionID)
 
 	return outCh, nil
 }
@@ -299,6 +338,49 @@ type openCodePendingPart struct {
 	Text      string
 }
 
+type openCodeHTTPError struct {
+	op     string
+	status int
+	body   string
+}
+
+func (e *openCodeHTTPError) Error() string {
+	return fmt.Sprintf("opencode %s: http %d: %s", e.op, e.status, strings.TrimSpace(e.body))
+}
+
+func isStaleSessionPromptError(err error) bool {
+	var httpErr *openCodeHTTPError
+	if !errors.As(err, &httpErr) {
+		return false
+	}
+	if httpErr.op != "prompt_async" {
+		return false
+	}
+	if httpErr.status == http.StatusNotFound || httpErr.status == http.StatusGone {
+		return true
+	}
+	if httpErr.status != http.StatusBadRequest {
+		return false
+	}
+	body := strings.ToLower(httpErr.body)
+	if !strings.Contains(body, "session") {
+		return false
+	}
+	if strings.Contains(body, "not found") {
+		return true
+	}
+	if strings.Contains(body, "unknown") {
+		return true
+	}
+	if strings.Contains(body, "invalid") {
+		return true
+	}
+	if strings.Contains(body, "does not exist") {
+		return true
+	}
+	return false
+}
+
 func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (string, error) {
 	url := g.baseURL + "/session"
 	body, _ := json.Marshal(map[string]string{"title": title})
@@ -323,11 +405,11 @@ func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (st
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return "", fmt.Errorf(
-			"opencode create session: http %d: %s",
-			resp.StatusCode,
-			strings.TrimSpace(string(respBody)),
-		)
+		return "", &openCodeHTTPError{
+			op:     "create session",
+			status: resp.StatusCode,
+			body:   string(respBody),
+		}
 	}
 
 	var decoded struct {
@@ -360,11 +442,7 @@ func (g *OpenCodeGenerator) openEventStream(ctx context.Context) (*http.Response
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf(
-			"opencode event stream: http %d: %s",
-			resp.StatusCode,
-			strings.TrimSpace(string(b)),
-		)
+		return nil, &openCodeHTTPError{op: "event stream", status: resp.StatusCode, body: string(b)}
 	}
 	return resp, nil
 }
@@ -396,11 +474,7 @@ func (g *OpenCodeGenerator) promptAsync(ctx context.Context, sessionID, prompt s
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"opencode prompt_async: http %d: %s",
-			resp.StatusCode,
-			strings.TrimSpace(string(b)),
-		)
+		return &openCodeHTTPError{op: "prompt_async", status: resp.StatusCode, body: string(b)}
 	}
 	return nil
 }
@@ -858,11 +932,7 @@ func (g *OpenCodeGenerator) replyPermission(
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf(
-			"opencode permission reply: http %d: %s",
-			resp.StatusCode,
-			strings.TrimSpace(string(b)),
-		)
+		return &openCodeHTTPError{op: "permission reply", status: resp.StatusCode, body: string(b)}
 	}
 	return nil
 }
