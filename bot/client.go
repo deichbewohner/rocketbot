@@ -643,6 +643,9 @@ func (c *Client) handleRenderStreamingResponse(
 	history []Message,
 	rg RenderStreamingGenerator,
 ) {
+	const noProgressNoticeAfter = 10 * time.Second
+	const noProgressNoticeEvery = 20 * time.Second
+
 	threadID := message.ThreadID
 	if shouldCreateThread(message, c.threadDefault) {
 		threadID = message.ID
@@ -668,16 +671,35 @@ func (c *Client) handleRenderStreamingResponse(
 	renderer := NewProgressiveRenderer()
 	lastSent := "..."
 	dirty := false
+	lastProgressAt := time.Now()
+	nextNoProgressNoticeAt := lastProgressAt.Add(noProgressNoticeAfter)
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	flush := func(force bool) bool {
-		if !dirty && !force {
+		base := renderer.Render()
+		noticeDue := false
+		if renderHasPlaceholder(base) {
+			elapsed := time.Since(lastProgressAt)
+			noticeDue = elapsed >= noProgressNoticeAfter && time.Now().After(nextNoProgressNoticeAt)
+		}
+
+		if !dirty && !force && !noticeDue {
 			c.logger.DebugContext(ctx, "render update skipped", "reason", "unchanged")
 			return true
 		}
-		current := renderer.Render()
+
+		current := base
+		if noticeDue {
+			elapsed := time.Since(lastProgressAt)
+			noticeText := fmt.Sprintf(
+				"_Still working... (%ds)_",
+				int(elapsed.Round(time.Second).Seconds()),
+			)
+			current = renderReplacePlaceholder(current, noticeText)
+			nextNoProgressNoticeAt = time.Now().Add(noProgressNoticeEvery)
+		}
 		if current == "" {
 			current = "..."
 		}
@@ -709,6 +731,8 @@ func (c *Client) handleRenderStreamingResponse(
 			changed := renderer.Apply(ev)
 			if changed {
 				dirty = true
+				lastProgressAt = time.Now()
+				nextNoProgressNoticeAt = lastProgressAt.Add(noProgressNoticeAfter)
 			}
 			c.logger.DebugContext(
 				ctx,
@@ -732,6 +756,25 @@ func (c *Client) handleRenderStreamingResponse(
 			return
 		}
 	}
+}
+
+func renderHasPlaceholder(rendered string) bool {
+	trimmed := strings.TrimSpace(rendered)
+	if trimmed == "..." {
+		return true
+	}
+	return strings.HasSuffix(trimmed, "\n\n...")
+}
+
+func renderReplacePlaceholder(rendered string, replacement string) string {
+	trimmed := strings.TrimSpace(rendered)
+	if trimmed == "..." {
+		return replacement
+	}
+	if strings.HasSuffix(trimmed, "\n\n...") {
+		return strings.TrimSuffix(trimmed, "\n\n...") + "\n\n" + replacement
+	}
+	return rendered
 }
 
 type botCommand string
