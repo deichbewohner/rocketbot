@@ -341,6 +341,7 @@ func (g *OpenCodeGenerator) GenerateRenderStream(
 		state := &openCodeStreamState{
 			assistantMsgIDs:  make(map[string]struct{}),
 			partText:         make(map[string]string),
+			partTypes:        make(map[string]string),
 			pendingParts:     make(map[string]openCodePendingPart),
 			pendingToolParts: make(map[string]openCodeToolPartUpdate),
 			seenToolCalls:    make(map[string]struct{}),
@@ -739,6 +740,7 @@ func (g *OpenCodeGenerator) conversation(key string) *openCodeConversation {
 type openCodeStreamState struct {
 	assistantMsgIDs  map[string]struct{}
 	partText         map[string]string              // partID -> last full text
+	partTypes        map[string]string              // partID -> part type (text/tool/..)
 	pendingParts     map[string]openCodePendingPart // partID -> last seen data for unknown message role
 	pendingToolParts map[string]openCodeToolPartUpdate
 	seenToolCalls    map[string]struct{}
@@ -1025,6 +1027,9 @@ func (g *OpenCodeGenerator) consumeRenderEvents(
 		if typ == "message.part.updated" {
 			upd, ok := toolPartUpdateFromEvent(payload)
 			if ok && upd.SessionID == sessionID {
+				if upd.PartID != "" {
+					state.partTypes[upd.PartID] = "tool"
+				}
 				if _, isAssistant := state.assistantMsgIDs[upd.MessageID]; !isAssistant {
 					state.pendingToolParts[upd.PartID] = upd
 					continue
@@ -1051,6 +1056,28 @@ func (g *OpenCodeGenerator) consumeRenderEvents(
 			txt, ok := textPartFromEvent(payload)
 			if !ok || txt.SessionID != sessionID {
 				continue
+			}
+
+			if txt.PartID != "" && txt.PartType != "" {
+				state.partTypes[txt.PartID] = txt.PartType
+			}
+
+			if txt.IsDelta {
+				partType := strings.TrimSpace(txt.PartType)
+				if partType == "" {
+					partType = state.partTypes[txt.PartID]
+				}
+				if partType != "text" {
+					g.logger.DebugContext(
+						ctx,
+						"opencode: skipping non-text delta",
+						"part_id",
+						txt.PartID,
+						"part_type",
+						partType,
+					)
+					continue
+				}
 			}
 
 			if _, isAssistant := state.assistantMsgIDs[txt.MessageID]; !isAssistant {
@@ -1422,6 +1449,7 @@ type openCodeTextPartUpdate struct {
 	SessionID string
 	MessageID string
 	PartID    string
+	PartType  string
 	Text      string
 	IsDelta   bool
 }
@@ -1465,6 +1493,7 @@ func textPartFromEvent(payload string) (openCodeTextPartUpdate, bool) {
 		sessionID, _ := props["sessionID"].(string)
 		messageID, _ := props["messageID"].(string)
 		partID, _ := props["partID"].(string)
+		partType, _ := props["partType"].(string)
 		if partID == "" || messageID == "" {
 			return openCodeTextPartUpdate{}, false
 		}
@@ -1472,6 +1501,7 @@ func textPartFromEvent(payload string) (openCodeTextPartUpdate, bool) {
 			SessionID: sessionID,
 			MessageID: messageID,
 			PartID:    partID,
+			PartType:  partType,
 			Text:      delta,
 			IsDelta:   true,
 		}, true
@@ -1495,6 +1525,7 @@ func textPartFromEvent(payload string) (openCodeTextPartUpdate, bool) {
 		SessionID: sessionID,
 		MessageID: messageID,
 		PartID:    partID,
+		PartType:  "text",
 		Text:      text,
 		IsDelta:   false,
 	}, true

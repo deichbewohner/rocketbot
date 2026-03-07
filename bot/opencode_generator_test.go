@@ -64,6 +64,57 @@ func TestOpenCodeGenerator_ConsumeEvents_EmitsAssistantTextOnly(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGenerator_ConsumeRenderEvents_SkipsNonTextDeltas(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+
+	sse := strings.Join([]string{
+		"data: {\"type\":\"server.connected\",\"properties\":{}}\n",
+		"data: {\"type\":\"message.updated\",\"properties\":{\"info\":{\"id\":\"msg_assistant\",\"sessionID\":\"ses1\",\"role\":\"assistant\"}}}\n",
+		"data: {\"type\":\"message.part.delta\",\"properties\":{\"sessionID\":\"ses1\",\"messageID\":\"msg_assistant\",\"partID\":\"part_reason\",\"partType\":\"reasoning\",\"field\":\"text\",\"delta\":\"thinking...\"}}\n",
+		"data: {\"type\":\"message.part.updated\",\"properties\":{\"part\":{\"id\":\"part_text\",\"sessionID\":\"ses1\",\"messageID\":\"msg_assistant\",\"type\":\"text\",\"text\":\"Answer\"}}}\n",
+		"data: {\"type\":\"session.idle\",\"properties\":{\"sessionID\":\"ses1\"}}\n",
+	}, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	outCh := make(chan RenderEvent, 16)
+	state := &openCodeStreamState{
+		assistantMsgIDs:  make(map[string]struct{}),
+		partText:         make(map[string]string),
+		partTypes:        make(map[string]string),
+		pendingParts:     make(map[string]openCodePendingPart),
+		pendingToolParts: make(map[string]openCodeToolPartUpdate),
+		seenToolCalls:    make(map[string]struct{}),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- g.consumeRenderEvents(ctx, strings.NewReader(sse), "ses1", state, outCh)
+		close(outCh)
+	}()
+
+	var rendered strings.Builder
+	for ev := range outCh {
+		if ev.Type == RenderEventTextDelta || ev.Type == RenderEventTextSet {
+			rendered.WriteString(ev.Text)
+		}
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("consumeRenderEvents() error = %v", err)
+	}
+
+	got := rendered.String()
+	if strings.Contains(got, "thinking") {
+		t.Fatalf("reasoning delta leaked into rendered text: %q", got)
+	}
+	if got != "Answer" {
+		t.Fatalf("rendered text = %q, want %q", got, "Answer")
+	}
+}
+
 func TestBuildPrompt_IncludeHistoryToggle(t *testing.T) {
 	message := Message{
 		Text: "What now?",
