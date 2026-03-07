@@ -54,6 +54,17 @@ type StreamingGenerator interface {
 	) (<-chan string, error)
 }
 
+// RenderStreamingGenerator is an optional interface for generators that support
+// structured streaming events for richer message rendering.
+type RenderStreamingGenerator interface {
+	ResponseGenerator
+	GenerateRenderStream(
+		ctx context.Context,
+		message Message,
+		history []Message,
+	) (<-chan RenderEvent, error)
+}
+
 // HistoryAwareGenerator can hint how much Rocket.Chat history it needs.
 // Returning 0 means no history fetch is needed for the current message.
 type HistoryAwareGenerator interface {

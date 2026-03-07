@@ -613,6 +613,11 @@ func (c *Client) handleDMResponse(message Message) {
 
 	// Check if generator supports streaming AND streamed output is enabled
 	if c.streamedOutput {
+		if rg, ok := c.generator.(RenderStreamingGenerator); ok {
+			c.logger.DebugContext(ctx, "using rich render streaming response mode")
+			c.handleRenderStreamingResponse(ctx, messageForGenerator, filteredHistory, rg)
+			return
+		}
 		if sg, ok := c.generator.(StreamingGenerator); ok {
 			c.logger.DebugContext(ctx, "using streaming response mode")
 			c.handleStreamingResponse(ctx, messageForGenerator, filteredHistory, sg)
@@ -628,6 +633,105 @@ func (c *Client) handleDMResponse(message Message) {
 		c.streamedOutput,
 	)
 	c.handleNonStreamingResponse(ctx, messageForGenerator, filteredHistory)
+}
+
+// handleRenderStreamingResponse handles structured streaming responses with
+// minimal tool rendering plus assistant answer text.
+func (c *Client) handleRenderStreamingResponse(
+	ctx context.Context,
+	message Message,
+	history []Message,
+	rg RenderStreamingGenerator,
+) {
+	threadID := message.ThreadID
+	if shouldCreateThread(message, c.threadDefault) {
+		threadID = message.ID
+	}
+
+	msgID, err := c.api.PostMessage(ctx, message.RoomID, "...", threadID)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "error posting initial message", "error", err)
+		return
+	}
+
+	ctx = context.WithValue(ctx, ReplyMessageIDKey, msgID)
+	ctx = context.WithValue(ctx, ReplyRoomIDKey, message.RoomID)
+
+	c.logger.DebugContext(ctx, "starting generator render stream")
+	eventCh, err := rg.GenerateRenderStream(ctx, message, history)
+	if err != nil {
+		c.logger.ErrorContext(ctx, "error starting render stream", "error", err)
+		return
+	}
+	c.logger.DebugContext(ctx, "generator render stream started")
+
+	renderer := NewProgressiveRenderer()
+	lastSent := "..."
+	dirty := false
+
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	flush := func(force bool) bool {
+		if !dirty && !force {
+			c.logger.DebugContext(ctx, "render update skipped", "reason", "unchanged")
+			return true
+		}
+		current := renderer.Render()
+		if current == "" {
+			current = "..."
+		}
+		if !force && current == lastSent {
+			dirty = false
+			c.logger.DebugContext(ctx, "render update skipped", "reason", "same_output")
+			return true
+		}
+		if err := c.api.UpdateMessage(ctx, message.RoomID, msgID, current); err != nil {
+			c.logger.ErrorContext(ctx, "error updating rendered message", "error", err)
+			return false
+		}
+		lastSent = current
+		dirty = false
+		c.logger.DebugContext(ctx, "rendered message updated", "length", len(current))
+		return true
+	}
+
+	for {
+		select {
+		case ev, ok := <-eventCh:
+			if !ok {
+				if !flush(true) {
+					return
+				}
+				c.logger.InfoContext(ctx, "response sent", "length", len(lastSent))
+				return
+			}
+			changed := renderer.Apply(ev)
+			if changed {
+				dirty = true
+			}
+			c.logger.DebugContext(
+				ctx,
+				"render event applied",
+				"type",
+				string(ev.Type),
+				"changed",
+				changed,
+				"tool",
+				ev.ToolName,
+				"status",
+				ev.Status,
+			)
+
+		case <-ticker.C:
+			if !flush(false) {
+				return
+			}
+
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 type botCommand string

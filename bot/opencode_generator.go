@@ -200,6 +200,55 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	renderCh, err := g.GenerateRenderStream(ctx, message, history)
+	if err != nil {
+		return nil, err
+	}
+	outCh := make(chan string, 10)
+	go func() {
+		defer close(outCh)
+		partText := make(map[string]string)
+		for ev := range renderCh {
+			switch ev.Type {
+			case RenderEventTextDelta:
+				if ev.Text == "" {
+					continue
+				}
+				partText[ev.PartID] = partText[ev.PartID] + ev.Text
+				if !sendChunk(ctx, outCh, ev.Text) {
+					return
+				}
+			case RenderEventTextSet:
+				prev := partText[ev.PartID]
+				next := ev.Text
+				partText[ev.PartID] = next
+				if next == "" {
+					continue
+				}
+				chunk := next
+				if prev != "" && strings.HasPrefix(next, prev) {
+					chunk = next[len(prev):]
+				}
+				if chunk == "" {
+					continue
+				}
+				if !sendChunk(ctx, outCh, chunk) {
+					return
+				}
+			}
+		}
+	}()
+	return outCh, nil
+}
+
+func (g *OpenCodeGenerator) GenerateRenderStream(
+	ctx context.Context,
+	message Message,
+	history []Message,
+) (<-chan RenderEvent, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	start := time.Now()
 	conversationKey := openCodeConversationKey(message)
@@ -276,7 +325,7 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		)
 	}
 
-	postPromptWithStream := func(sessionID, prompt string) (<-chan string, error) {
+	postPromptWithStream := func(sessionID, prompt string) (<-chan RenderEvent, error) {
 		g.logger.DebugContext(ctx, "opencode: opening event stream", "session_id", sessionID)
 		resp, err := g.openEventStream(ctx)
 		if err != nil {
@@ -284,15 +333,17 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 		}
 		g.logger.DebugContext(ctx, "opencode: event stream opened", "session_id", sessionID)
 
-		outCh := make(chan string, 10)
+		outCh := make(chan RenderEvent, 32)
 		done := make(chan struct{})
 		streamCtx, cancel := context.WithCancel(ctx)
 		cancelSeq := conv.setActiveCancel(cancel)
 
 		state := &openCodeStreamState{
-			assistantMsgIDs: make(map[string]struct{}),
-			partText:        make(map[string]string),
-			pendingParts:    make(map[string]openCodePendingPart),
+			assistantMsgIDs:  make(map[string]struct{}),
+			partText:         make(map[string]string),
+			pendingParts:     make(map[string]openCodePendingPart),
+			pendingToolParts: make(map[string]openCodeToolPartUpdate),
+			seenToolCalls:    make(map[string]struct{}),
 		}
 
 		go func() {
@@ -308,7 +359,7 @@ func (g *OpenCodeGenerator) GenerateResponseStream(
 				}
 			}()
 
-			if err := g.consumeEvents(streamCtx, resp.Body, sessionID, state, outCh); err != nil {
+			if err := g.consumeRenderEvents(streamCtx, resp.Body, sessionID, state, outCh); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					g.logger.Error("opencode stream ended with error", "error", err)
 				}
@@ -686,9 +737,11 @@ func (g *OpenCodeGenerator) conversation(key string) *openCodeConversation {
 }
 
 type openCodeStreamState struct {
-	assistantMsgIDs map[string]struct{}
-	partText        map[string]string              // partID -> last full text
-	pendingParts    map[string]openCodePendingPart // partID -> last seen data for unknown message role
+	assistantMsgIDs  map[string]struct{}
+	partText         map[string]string              // partID -> last full text
+	pendingParts     map[string]openCodePendingPart // partID -> last seen data for unknown message role
+	pendingToolParts map[string]openCodeToolPartUpdate
+	seenToolCalls    map[string]struct{}
 }
 
 type openCodePendingPart struct {
@@ -835,6 +888,240 @@ func (g *OpenCodeGenerator) promptAsync(ctx context.Context, sessionID, prompt s
 		return &openCodeHTTPError{op: "prompt_async", status: resp.StatusCode, body: string(b)}
 	}
 	return nil
+}
+
+func (g *OpenCodeGenerator) consumeRenderEvents(
+	ctx context.Context,
+	body io.Reader,
+	sessionID string,
+	state *openCodeStreamState,
+	outCh chan<- RenderEvent,
+) error {
+	reader := bufio.NewReader(body)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			if err == io.EOF {
+				g.logger.DebugContext(ctx, "opencode: event stream EOF", "session_id", sessionID)
+				return nil
+			}
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			continue
+		}
+		payload, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			continue
+		}
+		payload = strings.TrimSpace(payload)
+		if payload == "" {
+			continue
+		}
+
+		typ, sid := eventTypeAndSessionID(payload)
+		if typ == "" {
+			continue
+		}
+		if typ != "server.connected" && sid != sessionID {
+			continue
+		}
+
+		g.logger.DebugContext(
+			ctx,
+			"opencode: render event received",
+			"type",
+			typ,
+			"session_id",
+			sid,
+		)
+
+		if typ == "session.idle" && sid == sessionID {
+			_ = sendRenderEvent(ctx, outCh, RenderEvent{Type: RenderEventDone})
+			g.logger.DebugContext(ctx, "opencode: session idle", "session_id", sessionID)
+			return nil
+		}
+
+		if typ == "permission.asked" {
+			reqID, ok := permissionRequestIDFromAsked(payload)
+			if !ok {
+				continue
+			}
+			reply := "reject"
+			msg := "Denied by rocketbot configuration"
+			if g.permissionMode == "allow" {
+				reply = "always"
+				msg = "Approved by rocketbot configuration"
+			}
+			replyCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err := g.replyPermission(replyCtx, reqID, reply, msg)
+			cancel()
+			if err != nil {
+				return err
+			}
+			g.logger.InfoContext(
+				ctx,
+				"opencode: permission replied",
+				"session_id",
+				sessionID,
+				"request_id",
+				reqID,
+				"reply",
+				reply,
+			)
+			continue
+		}
+
+		if typ == "message.updated" {
+			assistantID, ok := assistantMessageIDFromMessageUpdated(payload)
+			if ok {
+				g.logger.DebugContext(
+					ctx,
+					"opencode: assistant message seen",
+					"session_id",
+					sessionID,
+					"message_id",
+					assistantID,
+				)
+				state.assistantMsgIDs[assistantID] = struct{}{}
+
+				for partID, pp := range state.pendingParts {
+					if pp.MessageID != assistantID || pp.Text == "" {
+						continue
+					}
+					state.partText[partID] = pp.Text
+					if !sendRenderEvent(ctx, outCh, RenderEvent{
+						Type:      RenderEventTextSet,
+						MessageID: pp.MessageID,
+						PartID:    partID,
+						Text:      pp.Text,
+					}) {
+						return ctx.Err()
+					}
+					delete(state.pendingParts, partID)
+				}
+
+				for partID, tu := range state.pendingToolParts {
+					if tu.MessageID != assistantID {
+						continue
+					}
+					ev := mapToolUpdateToRenderEvent(state, tu)
+					if !sendRenderEvent(ctx, outCh, ev) {
+						return ctx.Err()
+					}
+					delete(state.pendingToolParts, partID)
+				}
+			}
+			continue
+		}
+
+		if typ == "message.part.updated" {
+			upd, ok := toolPartUpdateFromEvent(payload)
+			if ok && upd.SessionID == sessionID {
+				if _, isAssistant := state.assistantMsgIDs[upd.MessageID]; !isAssistant {
+					state.pendingToolParts[upd.PartID] = upd
+					continue
+				}
+				ev := mapToolUpdateToRenderEvent(state, upd)
+				g.logger.DebugContext(
+					ctx,
+					"opencode: tool mapped",
+					"tool",
+					upd.Tool,
+					"status",
+					upd.Status,
+					"call_id",
+					upd.CallID,
+				)
+				if !sendRenderEvent(ctx, outCh, ev) {
+					return ctx.Err()
+				}
+				continue
+			}
+		}
+
+		if typ == "message.part.updated" || typ == "message.part.delta" {
+			txt, ok := textPartFromEvent(payload)
+			if !ok || txt.SessionID != sessionID {
+				continue
+			}
+
+			if _, isAssistant := state.assistantMsgIDs[txt.MessageID]; !isAssistant {
+				pp := state.pendingParts[txt.PartID]
+				pp.MessageID = txt.MessageID
+				if txt.IsDelta {
+					pp.Text += txt.Text
+				} else {
+					pp.Text = txt.Text
+				}
+				state.pendingParts[txt.PartID] = pp
+				continue
+			}
+
+			if txt.IsDelta {
+				state.partText[txt.PartID] = state.partText[txt.PartID] + txt.Text
+				if txt.Text == "" {
+					continue
+				}
+				if !sendRenderEvent(ctx, outCh, RenderEvent{
+					Type:      RenderEventTextDelta,
+					MessageID: txt.MessageID,
+					PartID:    txt.PartID,
+					Text:      txt.Text,
+				}) {
+					return ctx.Err()
+				}
+				continue
+			}
+
+			prev := state.partText[txt.PartID]
+			next := txt.Text
+			state.partText[txt.PartID] = next
+			if next == "" {
+				continue
+			}
+			if prev != "" && strings.HasPrefix(next, prev) {
+				delta := next[len(prev):]
+				if delta == "" {
+					continue
+				}
+				if !sendRenderEvent(ctx, outCh, RenderEvent{
+					Type:      RenderEventTextDelta,
+					MessageID: txt.MessageID,
+					PartID:    txt.PartID,
+					Text:      delta,
+				}) {
+					return ctx.Err()
+				}
+				continue
+			}
+
+			if !sendRenderEvent(ctx, outCh, RenderEvent{
+				Type:      RenderEventTextSet,
+				MessageID: txt.MessageID,
+				PartID:    txt.PartID,
+				Text:      next,
+			}) {
+				return ctx.Err()
+			}
+		}
+	}
+}
+
+func sendRenderEvent(ctx context.Context, ch chan<- RenderEvent, event RenderEvent) bool {
+	select {
+	case ch <- event:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (g *OpenCodeGenerator) consumeEvents(
@@ -1136,46 +1423,89 @@ type openCodeTextPartUpdate struct {
 	MessageID string
 	PartID    string
 	Text      string
+	IsDelta   bool
 }
 
 type openCodeToolPartUpdate struct {
 	SessionID string
+	MessageID string
+	PartID    string
+	CallID    string
 	Tool      string
 	Status    string
+	Title     string
 	Command   string
+	Path      string
+	Pattern   string
+	Query     string
 	OutputLen int
 	ExitCode  *int
 	Truncated *bool
+	ErrText   string
 }
 
-func textPartUpdateFromEvent(payload string) (openCodeTextPartUpdate, bool) {
-	var evt struct {
-		Type       string `json:"type"`
-		Properties struct {
-			Part struct {
-				ID        string `json:"id"`
-				SessionID string `json:"sessionID"`
-				MessageID string `json:"messageID"`
-				Type      string `json:"type"`
-				Text      string `json:"text"`
-			} `json:"part"`
-		} `json:"properties"`
-	}
+func textPartFromEvent(payload string) (openCodeTextPartUpdate, bool) {
+	var evt map[string]any
 	if err := json.Unmarshal([]byte(payload), &evt); err != nil {
 		return openCodeTextPartUpdate{}, false
 	}
-	if evt.Properties.Part.Type != "text" {
+
+	typ, _ := evt["type"].(string)
+	props, _ := evt["properties"].(map[string]any)
+	if props == nil {
 		return openCodeTextPartUpdate{}, false
 	}
-	if evt.Properties.Part.ID == "" || evt.Properties.Part.MessageID == "" {
+
+	if typ == "message.part.delta" {
+		field, _ := props["field"].(string)
+		if field != "text" {
+			return openCodeTextPartUpdate{}, false
+		}
+		delta, _ := props["delta"].(string)
+		sessionID, _ := props["sessionID"].(string)
+		messageID, _ := props["messageID"].(string)
+		partID, _ := props["partID"].(string)
+		if partID == "" || messageID == "" {
+			return openCodeTextPartUpdate{}, false
+		}
+		return openCodeTextPartUpdate{
+			SessionID: sessionID,
+			MessageID: messageID,
+			PartID:    partID,
+			Text:      delta,
+			IsDelta:   true,
+		}, true
+	}
+
+	part, _ := props["part"].(map[string]any)
+	if part == nil {
 		return openCodeTextPartUpdate{}, false
 	}
+	if partType, _ := part["type"].(string); partType != "text" {
+		return openCodeTextPartUpdate{}, false
+	}
+	partID, _ := part["id"].(string)
+	messageID, _ := part["messageID"].(string)
+	if partID == "" || messageID == "" {
+		return openCodeTextPartUpdate{}, false
+	}
+	sessionID, _ := part["sessionID"].(string)
+	text, _ := part["text"].(string)
 	return openCodeTextPartUpdate{
-		SessionID: evt.Properties.Part.SessionID,
-		MessageID: evt.Properties.Part.MessageID,
-		PartID:    evt.Properties.Part.ID,
-		Text:      evt.Properties.Part.Text,
+		SessionID: sessionID,
+		MessageID: messageID,
+		PartID:    partID,
+		Text:      text,
+		IsDelta:   false,
 	}, true
+}
+
+func textPartUpdateFromEvent(payload string) (openCodeTextPartUpdate, bool) {
+	upd, ok := textPartFromEvent(payload)
+	if !ok || upd.IsDelta {
+		return openCodeTextPartUpdate{}, false
+	}
+	return upd, true
 }
 
 func toolPartUpdateFromEvent(payload string) (openCodeToolPartUpdate, bool) {
@@ -1200,8 +1530,17 @@ func toolPartUpdateFromEvent(payload string) (openCodeToolPartUpdate, bool) {
 	}
 
 	upd := openCodeToolPartUpdate{}
+	if v, _ := part["id"].(string); v != "" {
+		upd.PartID = v
+	}
 	if v, _ := part["sessionID"].(string); v != "" {
 		upd.SessionID = v
+	}
+	if v, _ := part["messageID"].(string); v != "" {
+		upd.MessageID = v
+	}
+	if v, _ := part["callID"].(string); v != "" {
+		upd.CallID = v
 	}
 	if v, _ := part["tool"].(string); v != "" {
 		upd.Tool = v
@@ -1213,11 +1552,26 @@ func toolPartUpdateFromEvent(payload string) (openCodeToolPartUpdate, bool) {
 	if v, _ := state["status"].(string); v != "" {
 		upd.Status = v
 	}
+	if v, _ := state["title"].(string); v != "" {
+		upd.Title = v
+	}
 	input, _ := state["input"].(map[string]any)
 	if input != nil {
 		if v, _ := input["command"].(string); v != "" {
 			upd.Command = v
 		}
+		if v, _ := input["path"].(string); v != "" {
+			upd.Path = v
+		}
+		if v, _ := input["pattern"].(string); v != "" {
+			upd.Pattern = v
+		}
+		if v, _ := input["query"].(string); v != "" {
+			upd.Query = v
+		}
+	}
+	if v, _ := state["error"].(string); v != "" {
+		upd.ErrText = v
 	}
 	if out, ok := state["output"].(string); ok {
 		upd.OutputLen = len(out)
@@ -1236,6 +1590,64 @@ func toolPartUpdateFromEvent(payload string) (openCodeToolPartUpdate, bool) {
 		}
 	}
 	return upd, true
+}
+
+func toolCallKey(upd openCodeToolPartUpdate) string {
+	if upd.CallID != "" {
+		return upd.CallID
+	}
+	if upd.PartID != "" {
+		return upd.PartID
+	}
+	if upd.Tool != "" {
+		return upd.Tool
+	}
+	return "tool"
+}
+
+func mapToolUpdateToRenderEvent(
+	state *openCodeStreamState,
+	upd openCodeToolPartUpdate,
+) RenderEvent {
+	key := toolCallKey(upd)
+	status := strings.ToLower(strings.TrimSpace(upd.Status))
+	eventType := RenderEventToolUpdate
+	_, seen := state.seenToolCalls[key]
+
+	switch status {
+	case "pending", "running":
+		if !seen {
+			eventType = RenderEventToolStart
+			state.seenToolCalls[key] = struct{}{}
+		}
+	case "completed":
+		eventType = RenderEventToolFinish
+		state.seenToolCalls[key] = struct{}{}
+	case "error":
+		eventType = RenderEventToolError
+		state.seenToolCalls[key] = struct{}{}
+	default:
+		if !seen {
+			eventType = RenderEventToolStart
+			state.seenToolCalls[key] = struct{}{}
+		}
+	}
+
+	return RenderEvent{
+		Type:      eventType,
+		MessageID: upd.MessageID,
+		PartID:    upd.PartID,
+		CallID:    upd.CallID,
+		ToolName:  upd.Tool,
+		Status:    upd.Status,
+		Title:     upd.Title,
+		Command:   upd.Command,
+		Path:      upd.Path,
+		Pattern:   upd.Pattern,
+		Query:     upd.Query,
+		ExitCode:  upd.ExitCode,
+		ErrText:   upd.ErrText,
+	}
 }
 
 func permissionRequestIDFromAsked(payload string) (string, bool) {
@@ -1296,7 +1708,8 @@ func (g *OpenCodeGenerator) replyPermission(
 }
 
 var (
-	_ StreamingGenerator    = (*OpenCodeGenerator)(nil)
-	_ HistoryAwareGenerator = (*OpenCodeGenerator)(nil)
-	_ SessionResetter       = (*OpenCodeGenerator)(nil)
+	_ StreamingGenerator       = (*OpenCodeGenerator)(nil)
+	_ RenderStreamingGenerator = (*OpenCodeGenerator)(nil)
+	_ HistoryAwareGenerator    = (*OpenCodeGenerator)(nil)
+	_ SessionResetter          = (*OpenCodeGenerator)(nil)
 )
