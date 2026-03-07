@@ -2,6 +2,8 @@ package bot
 
 import "strings"
 
+const maxToolCommandDisplay = 20
+
 func capitalizeASCII(s string) string {
 	if s == "" {
 		return s
@@ -11,6 +13,18 @@ func capitalizeASCII(s string) string {
 		b[0] = b[0] - ('a' - 'A')
 	}
 	return string(b)
+}
+
+func truncateDisplayText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "..."
 }
 
 func summarizeToolEvent(ev RenderEvent) string {
@@ -26,7 +40,7 @@ func summarizeToolEvent(ev RenderEvent) string {
 			return "Read failed"
 		case "bash":
 			if ev.Command != "" {
-				return "Bash failed: " + ev.Command
+				return "Bash failed: " + truncateDisplayText(ev.Command, maxToolCommandDisplay)
 			}
 			return "Bash failed"
 		default:
@@ -48,7 +62,7 @@ func summarizeToolEvent(ev RenderEvent) string {
 		return "Reading file"
 	case "bash":
 		if ev.Command != "" {
-			return "Running bash: " + ev.Command
+			return "Running bash: " + truncateDisplayText(ev.Command, maxToolCommandDisplay)
 		}
 		if ev.Title != "" {
 			return ev.Title
