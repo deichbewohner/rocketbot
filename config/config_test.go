@@ -206,11 +206,33 @@ func TestLoad_OpenCodeGenerator_Succeeds(t *testing.T) {
 	if bot.OpenCodePermissionMode != "deny" {
 		t.Errorf("OpenCodePermissionMode = %q, want default", bot.OpenCodePermissionMode)
 	}
+	if bot.OpenCodeSessionDir != "" {
+		t.Errorf("OpenCodeSessionDir = %q, want empty", bot.OpenCodeSessionDir)
+	}
 	if bot.ParserType != "" {
 		t.Errorf("ParserType = %q, want empty", bot.ParserType)
 	}
 	if bot.WebhookURL != "" {
 		t.Errorf("WebhookURL = %q, want empty", bot.WebhookURL)
+	}
+}
+
+func TestLoad_OpenCodeGenerator_AllowsSessionDir(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_OPENCODE_SESSION_DIR", " /tmp/foo ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.OpenCodeSessionDir != "/tmp/foo" {
+		t.Fatalf("OpenCodeSessionDir = %q, want %q", bot.OpenCodeSessionDir, "/tmp/foo")
 	}
 }
 
@@ -247,6 +269,24 @@ func TestLoad_WebhookGenerator_RejectsOpenCodeVars(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OPENCODE_BASE_URL must not be set") {
 		t.Fatalf("Load() error = %v, want opencode vars forbidden error", err)
+	}
+}
+
+func TestLoad_WebhookGenerator_RejectsOpenCodeSessionDir(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT1_OPENCODE_SESSION_DIR", "/tmp/foo")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "OPENCODE_SESSION_DIR must not be set") {
+		t.Fatalf("Load() error = %v, want opencode session dir forbidden error", err)
 	}
 }
 

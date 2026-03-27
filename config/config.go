@@ -17,6 +17,7 @@ type BotConfig struct {
 	GeneratorType          string // Response generator type (e.g., "webhook", "opencode")
 	OpenCodeBaseURL        string // OpenCode server base URL (GENERATOR_TYPE=opencode)
 	OpenCodeAuth           string // Optional Authorization header (GENERATOR_TYPE=opencode)
+	OpenCodeSessionDir     string // Optional working directory for new OpenCode sessions (GENERATOR_TYPE=opencode)
 	OpenCodePermissionMode string // Permission auto-reply mode (GENERATOR_TYPE=opencode)
 	WebhookURL             string
 	WebhookAuth            string
@@ -76,6 +77,7 @@ func Load() (*Config, error) {
 		generatorType := os.Getenv(prefix + "GENERATOR_TYPE")
 		opencodeBaseURL := os.Getenv(prefix + "OPENCODE_BASE_URL")
 		opencodeAuth := os.Getenv(prefix + "OPENCODE_AUTH")
+		opencodeSessionDir := strings.TrimSpace(os.Getenv(prefix + "OPENCODE_SESSION_DIR"))
 		opencodePermissionMode := os.Getenv(prefix + "OPENCODE_PERMISSION_MODE")
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
@@ -131,6 +133,13 @@ func Load() (*Config, error) {
 			if opencodePermissionMode != "" {
 				return nil, fmt.Errorf(
 					"%sOPENCODE_PERMISSION_MODE must not be set when %sGENERATOR_TYPE=webhook",
+					prefix,
+					prefix,
+				)
+			}
+			if opencodeSessionDir != "" {
+				return nil, fmt.Errorf(
+					"%sOPENCODE_SESSION_DIR must not be set when %sGENERATOR_TYPE=webhook",
 					prefix,
 					prefix,
 				)
@@ -228,6 +237,7 @@ func Load() (*Config, error) {
 			GeneratorType:          generatorType,
 			OpenCodeBaseURL:        opencodeBaseURL,
 			OpenCodeAuth:           opencodeAuth,
+			OpenCodeSessionDir:     opencodeSessionDir,
 			OpenCodePermissionMode: opencodePermissionMode,
 			WebhookURL:             webhookURL,
 			WebhookAuth:            webhookAuth,

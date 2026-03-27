@@ -14,7 +14,7 @@ import (
 
 func TestOpenCodeGenerator_ConsumeEvents_EmitsAssistantTextOnly(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", "", nil, logger)
 
 	// Assistant part arrives before we learn the message role; it should be buffered
 	// and flushed once message.updated marks it as assistant.
@@ -66,7 +66,7 @@ func TestOpenCodeGenerator_ConsumeEvents_EmitsAssistantTextOnly(t *testing.T) {
 
 func TestOpenCodeGenerator_ConsumeRenderEvents_SkipsNonTextDeltas(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", "", nil, logger)
 
 	sse := strings.Join([]string{
 		"data: {\"type\":\"server.connected\",\"properties\":{}}\n",
@@ -143,7 +143,7 @@ func TestBuildPrompt_IncludeHistoryToggle(t *testing.T) {
 
 func TestOpenCodeGenerator_HistoryLimit_TracksSessionBootstrap(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", "", nil, logger)
 
 	msg := Message{RoomID: "room1", ThreadID: "thread1"}
 	if got := g.HistoryLimit(msg); got != 10 {
@@ -161,7 +161,7 @@ func TestOpenCodeGenerator_HistoryLimit_TracksSessionBootstrap(t *testing.T) {
 
 func TestOpenCodeGenerator_HistoryLimit_DoesNotBlockOnPromptLock(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", nil, logger)
+	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", "", nil, logger)
 
 	msg := Message{RoomID: "room1", ThreadID: "thread1"}
 	conv := g.conversation(openCodeConversationKey(msg))
@@ -224,7 +224,7 @@ func TestOpenCodeGenerator_GenerateResponseStream_RetriesOnStaleSession(t *testi
 	defer srv.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "", srv.Client(), logger)
 
 	message := Message{RoomID: "room1", Text: "hello", User: MessageUser{Username: "alice"}}
 	history := []Message{{Text: "prev", User: MessageUser{Username: "bob"}}}
@@ -288,7 +288,7 @@ func TestOpenCodeGenerator_GenerateResponseStream_DoesNotRetryOnNonStalePromptEr
 	defer srv.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "", srv.Client(), logger)
 
 	message := Message{RoomID: "room1", Text: "hello", User: MessageUser{Username: "alice"}}
 	conv := g.conversation(openCodeConversationKey(message))
@@ -429,7 +429,7 @@ func TestOpenCodeGenerator_ResetSession_AbortsAndDeletesSessionTree(t *testing.T
 	defer srv.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "", srv.Client(), logger)
 
 	msg := Message{RoomID: "room1", User: MessageUser{Username: "alice"}}
 	conv := g.conversation(openCodeConversationKey(msg))
@@ -481,7 +481,7 @@ func TestOpenCodeGenerator_ResetSession_CancelsActiveGeneration(t *testing.T) {
 	defer srv.Close()
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
-	g := NewOpenCodeGenerator(srv.URL, "", "deny", srv.Client(), logger)
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "", srv.Client(), logger)
 
 	msg := Message{RoomID: "room1"}
 	conv := g.conversation(openCodeConversationKey(msg))
@@ -498,5 +498,39 @@ func TestOpenCodeGenerator_ResetSession_CancelsActiveGeneration(t *testing.T) {
 	case <-activeCtx.Done():
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected active context to be canceled")
+	}
+}
+
+func TestOpenCodeGenerator_CreateSession_AddsDirectoryQueryWhenConfigured(t *testing.T) {
+	var gotPath string
+	var gotQuery string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		gotPath = r.URL.Path
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"new-session"}`))
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "/tmp/foo", srv.Client(), logger)
+
+	sessionID, err := g.createSession(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("createSession() error = %v", err)
+	}
+	if sessionID != "new-session" {
+		t.Fatalf("createSession() = %q, want %q", sessionID, "new-session")
+	}
+	if gotPath != "/session" {
+		t.Fatalf("request path = %q, want %q", gotPath, "/session")
+	}
+	if gotQuery != "directory=%2Ftmp%2Ffoo" {
+		t.Fatalf("request query = %q, want %q", gotQuery, "directory=%2Ftmp%2Ffoo")
 	}
 }

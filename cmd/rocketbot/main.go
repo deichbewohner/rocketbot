@@ -111,6 +111,7 @@ func newGenerator(
 			botCfg.OpenCodeBaseURL,
 			botCfg.OpenCodeAuth,
 			botCfg.OpenCodePermissionMode,
+			botCfg.OpenCodeSessionDir,
 			httpClient,
 			logger,
 		), nil

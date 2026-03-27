@@ -29,6 +29,7 @@ const defaultOpenCodeBaseURL = "http://127.0.0.1:4096"
 type OpenCodeGenerator struct {
 	baseURL        string
 	auth           string
+	sessionDir     string
 	permissionMode string
 	client         *http.Client
 	logger         *slog.Logger
@@ -98,6 +99,7 @@ func NewOpenCodeGenerator(
 	baseURL string,
 	auth string,
 	permissionMode string,
+	sessionDir string,
 	client *http.Client,
 	logger *slog.Logger,
 ) *OpenCodeGenerator {
@@ -115,6 +117,8 @@ func NewOpenCodeGenerator(
 		permissionMode = "deny"
 	}
 
+	sessionDir = strings.TrimSpace(sessionDir)
+
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -124,6 +128,7 @@ func NewOpenCodeGenerator(
 	return &OpenCodeGenerator{
 		baseURL:        baseURL,
 		auth:           auth,
+		sessionDir:     sessionDir,
 		permissionMode: permissionMode,
 		client:         client,
 		logger:         logger,
@@ -795,10 +800,23 @@ func isStaleSessionPromptError(err error) bool {
 }
 
 func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (string, error) {
-	url := g.baseURL + "/session"
+	base, err := url.Parse(g.baseURL + "/session")
+	if err != nil {
+		return "", err
+	}
+	if g.sessionDir != "" {
+		query := base.Query()
+		query.Set("directory", g.sessionDir)
+		base.RawQuery = query.Encode()
+	}
 	body, _ := json.Marshal(map[string]string{"title": title})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		base.String(),
+		bytes.NewReader(body),
+	)
 	if err != nil {
 		return "", err
 	}

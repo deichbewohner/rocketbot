@@ -101,6 +101,7 @@ Response generation is configurable per bot via `BOTn_GENERATOR_TYPE`.
 For `opencode`, permission prompts can be auto-handled with:
 
 - `BOTn_OPENCODE_PERMISSION_MODE=allow|deny` (default: `deny`)
+- `BOTn_OPENCODE_SESSION_DIR=/absolute/path` (optional working directory for new sessions)
 
 OpenCode sessions are reused in-memory per conversation (`room` or `room+thread`).
 History is sent only when bootstrapping a new OpenCode session.
