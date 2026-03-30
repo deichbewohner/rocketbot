@@ -509,9 +509,7 @@ func (g *OpenCodeGenerator) abortSession(ctx context.Context, sessionID string) 
 	if err != nil {
 		return err
 	}
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -542,9 +540,7 @@ func (g *OpenCodeGenerator) deleteSession(ctx context.Context, sessionID string)
 	if err != nil {
 		return err
 	}
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -578,9 +574,7 @@ func (g *OpenCodeGenerator) listChildSessions(
 	if err != nil {
 		return nil, err
 	}
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -650,9 +644,7 @@ func (g *OpenCodeGenerator) sessionBusy(ctx context.Context, sessionID string) (
 	if err != nil {
 		return false, false, err
 	}
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -821,9 +813,7 @@ func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (st
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -862,9 +852,7 @@ func (g *OpenCodeGenerator) openEventStream(ctx context.Context) (*http.Response
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -890,9 +878,7 @@ func (g *OpenCodeGenerator) promptAsync(ctx context.Context, sessionID, prompt s
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -1736,9 +1722,7 @@ func (g *OpenCodeGenerator) replyPermission(
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if g.auth != "" {
-		req.Header.Set("Authorization", g.auth)
-	}
+	g.applyRequestHeaders(req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -1754,6 +1738,15 @@ func (g *OpenCodeGenerator) replyPermission(
 		return &openCodeHTTPError{op: "permission reply", status: resp.StatusCode, body: string(b)}
 	}
 	return nil
+}
+
+func (g *OpenCodeGenerator) applyRequestHeaders(req *http.Request) {
+	if g.auth != "" {
+		req.Header.Set("Authorization", g.auth)
+	}
+	if g.sessionDir != "" {
+		req.Header.Set("x-opencode-directory", g.sessionDir)
+	}
 }
 
 var (

@@ -504,6 +504,7 @@ func TestOpenCodeGenerator_ResetSession_CancelsActiveGeneration(t *testing.T) {
 func TestOpenCodeGenerator_CreateSession_AddsDirectoryQueryWhenConfigured(t *testing.T) {
 	var gotPath string
 	var gotQuery string
+	var gotHeader string
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -512,6 +513,7 @@ func TestOpenCodeGenerator_CreateSession_AddsDirectoryQueryWhenConfigured(t *tes
 		}
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
+		gotHeader = r.Header.Get("x-opencode-directory")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"new-session"}`))
 	}))
@@ -532,5 +534,84 @@ func TestOpenCodeGenerator_CreateSession_AddsDirectoryQueryWhenConfigured(t *tes
 	}
 	if gotQuery != "directory=%2Ftmp%2Ffoo" {
 		t.Fatalf("request query = %q, want %q", gotQuery, "directory=%2Ftmp%2Ffoo")
+	}
+	if gotHeader != "/tmp/foo" {
+		t.Fatalf("directory header = %q, want %q", gotHeader, "/tmp/foo")
+	}
+}
+
+func TestOpenCodeGenerator_SendsDirectoryHeaderOnFollowupRequests(t *testing.T) {
+	var gotEventHeader string
+	var gotPromptHeader string
+	var gotStatusHeader string
+	var gotChildrenHeader string
+	var gotAbortHeader string
+	var gotDeleteHeader string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/event":
+			gotEventHeader = r.Header.Get("x-opencode-directory")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"server.connected\",\"properties\":{}}\n"))
+		case r.Method == http.MethodPost && r.URL.Path == "/session/session-1/prompt_async":
+			gotPromptHeader = r.Header.Get("x-opencode-directory")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		case r.Method == http.MethodGet && r.URL.Path == "/session/status":
+			gotStatusHeader = r.Header.Get("x-opencode-directory")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[{"id":"session-1","status":"idle"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/session/session-1/children":
+			gotChildrenHeader = r.Header.Get("x-opencode-directory")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.Method == http.MethodPost && r.URL.Path == "/session/session-1/abort":
+			gotAbortHeader = r.Header.Get("x-opencode-directory")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		case r.Method == http.MethodDelete && r.URL.Path == "/session/session-1":
+			gotDeleteHeader = r.Header.Get("x-opencode-directory")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("{}"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "/tmp/foo", srv.Client(), logger)
+
+	if _, err := g.openEventStream(context.Background()); err != nil {
+		t.Fatalf("openEventStream() error = %v", err)
+	}
+	if err := g.promptAsync(context.Background(), "session-1", "hello"); err != nil {
+		t.Fatalf("promptAsync() error = %v", err)
+	}
+	if _, _, err := g.sessionBusy(context.Background(), "session-1"); err != nil {
+		t.Fatalf("sessionBusy() error = %v", err)
+	}
+	if _, err := g.listChildSessions(context.Background(), "session-1"); err != nil {
+		t.Fatalf("listChildSessions() error = %v", err)
+	}
+	if err := g.abortSession(context.Background(), "session-1"); err != nil {
+		t.Fatalf("abortSession() error = %v", err)
+	}
+	if err := g.deleteSession(context.Background(), "session-1"); err != nil {
+		t.Fatalf("deleteSession() error = %v", err)
+	}
+
+	for name, got := range map[string]string{
+		"event":    gotEventHeader,
+		"prompt":   gotPromptHeader,
+		"status":   gotStatusHeader,
+		"children": gotChildrenHeader,
+		"abort":    gotAbortHeader,
+		"delete":   gotDeleteHeader,
+	} {
+		if got != "/tmp/foo" {
+			t.Fatalf("%s directory header = %q, want %q", name, got, "/tmp/foo")
+		}
 	}
 }
