@@ -1,12 +1,21 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+type RoomPolicyConfig struct {
+	Enabled            bool   `json:"enabled"`
+	OpenCodeSessionDir string `json:"opencodeSessionDir"`
+	BootstrapPrompt    string `json:"bootstrapPrompt"`
+	ThreadDefault      *bool  `json:"threadDefault"`
+	StreamedOutput     *bool  `json:"streamedOutput"`
+}
 
 // BotConfig holds configuration for a single bot instance
 type BotConfig struct {
@@ -26,6 +35,8 @@ type BotConfig struct {
 	APIToken               string // HTTP API authentication token
 	ThreadDefault          bool   // Always reply in threads (default: false)
 	StatusMessage          string // Custom status message (optional, defaults to "Bot is active")
+	BootstrapPrompt        string // Optional prompt prepended only when starting a new conversation
+	RoomPolicies           map[string]RoomPolicyConfig
 }
 
 // Config holds all bot configurations
@@ -82,6 +93,8 @@ func Load() (*Config, error) {
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
 		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
+		bootstrapPrompt := strings.TrimSpace(os.Getenv(prefix + "BOOTSTRAP_PROMPT"))
+		roomPoliciesJSON := strings.TrimSpace(os.Getenv(prefix + "ROOM_POLICIES_JSON"))
 
 		// Validate required fields
 		if slug == "" {
@@ -229,6 +242,11 @@ func Load() (*Config, error) {
 			enableThreadDefault = threadDefault == "true" || threadDefault == "1"
 		}
 
+		roomPolicies, err := parseRoomPoliciesJSON(prefix, roomPoliciesJSON)
+		if err != nil {
+			return nil, err
+		}
+
 		cfg.Bots = append(cfg.Bots, BotConfig{
 			Slug:                   slug,
 			URL:                    url,
@@ -246,6 +264,8 @@ func Load() (*Config, error) {
 			APIToken:               apiToken,
 			ThreadDefault:          enableThreadDefault,
 			StatusMessage:          statusMessage,
+			BootstrapPrompt:        bootstrapPrompt,
+			RoomPolicies:           roomPolicies,
 		})
 	}
 
@@ -256,6 +276,47 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func parseRoomPoliciesJSON(prefix, raw string) (map[string]RoomPolicyConfig, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	var payload struct {
+		Rooms map[string]RoomPolicyConfig `json:"rooms"`
+	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&payload); err != nil {
+		return nil, fmt.Errorf("%sROOM_POLICIES_JSON invalid: %w", prefix, err)
+	}
+
+	if len(payload.Rooms) == 0 {
+		return nil, fmt.Errorf("%sROOM_POLICIES_JSON must define at least one room", prefix)
+	}
+
+	for roomID, policy := range payload.Rooms {
+		if strings.TrimSpace(roomID) == "" {
+			return nil, fmt.Errorf("%sROOM_POLICIES_JSON contains empty room id", prefix)
+		}
+		if !policy.Enabled {
+			continue
+		}
+		if policy.OpenCodeSessionDir == "" && policy.BootstrapPrompt == "" &&
+			policy.ThreadDefault == nil && policy.StreamedOutput == nil {
+			return nil, fmt.Errorf(
+				"%sROOM_POLICIES_JSON room %q must override at least one setting when enabled",
+				prefix,
+				roomID,
+			)
+		}
+		policy.OpenCodeSessionDir = strings.TrimSpace(policy.OpenCodeSessionDir)
+		policy.BootstrapPrompt = strings.TrimSpace(policy.BootstrapPrompt)
+		payload.Rooms[roomID] = policy
+	}
+
+	return payload.Rooms, nil
 }
 
 // Count returns the number of configured bots

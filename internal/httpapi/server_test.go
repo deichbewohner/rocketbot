@@ -169,7 +169,7 @@ func TestServer_MaxBytesReader(t *testing.T) {
 
 	client := bot.NewClientWithAPI(
 		bot.NewAPIClient("https://test.local", "user1", "token1", mockHTTPClient, logger),
-		"BOT1", nil, false, false, logger, "",
+		"BOT1", nil, false, false, logger, "", "", nil,
 	)
 	srv := httpapi.NewServer(
 		map[string]*bot.Client{"alerts": client},
@@ -221,6 +221,8 @@ func TestServer_MultipleBots(t *testing.T) {
 				false,
 				logger,
 				"",
+				"",
+				nil,
 			),
 			"notifications": bot.NewClientWithAPI(
 				bot.NewAPIClient("https://chat2.local", "user2", "token2", mockHTTPClient, logger),
@@ -230,6 +232,8 @@ func TestServer_MultipleBots(t *testing.T) {
 				false,
 				logger,
 				"",
+				"",
+				nil,
 			),
 		},
 		map[string]string{
@@ -295,6 +299,8 @@ func TestServer_BotWithoutAPIToken(t *testing.T) {
 				false,
 				logger,
 				"",
+				"",
+				nil,
 			),
 		},
 		map[string]string{
@@ -372,6 +378,8 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 					false,
 					logger,
 					"",
+					"",
+					nil,
 				),
 			},
 			payload:    map[string]any{"target": map[string]any{"roomId": "room123"}},
@@ -402,6 +410,8 @@ func TestServer_HandleSend_ValidationFailures(t *testing.T) {
 					false,
 					logger,
 					"",
+					"",
+					nil,
 				),
 			},
 			payload: map[string]any{
@@ -485,7 +495,7 @@ func TestServer_HandleSend_UsernameTargetSuccess(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	botClient := bot.NewClientWithAPI(
 		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
-		"BOT1", nil, false, false, logger, "",
+		"BOT1", nil, false, false, logger, "", "", nil,
 	)
 	srv := httpapi.NewServer(
 		map[string]*bot.Client{"alerts": botClient},
@@ -557,7 +567,7 @@ func TestServer_HandleSend_RoomIDTargetSuccess(t *testing.T) {
 	httpClient := &http.Client{Transport: transport}
 	botClient := bot.NewClientWithAPI(
 		bot.NewAPIClient("https://chat.local", "user", "token", httpClient, logger),
-		"BOT1", nil, false, false, logger, "",
+		"BOT1", nil, false, false, logger, "", "", nil,
 	)
 	srv := httpapi.NewServer(
 		map[string]*bot.Client{"alerts": botClient},

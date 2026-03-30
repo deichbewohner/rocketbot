@@ -12,7 +12,31 @@ const (
 	ReplyMessageIDKey contextKey = "replyMessageID"
 	// ReplyRoomIDKey is the context key for the room ID where the bot is replying
 	ReplyRoomIDKey contextKey = "replyRoomID"
+	// GenerationOptionsKey is the context key for request-scoped generator settings.
+	GenerationOptionsKey contextKey = "generationOptions"
 )
+
+type GenerationOptions struct {
+	Scope           string
+	RoomID          string
+	SessionDir      string
+	BootstrapPrompt string
+}
+
+func WithGenerationOptions(ctx context.Context, opts GenerationOptions) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, GenerationOptionsKey, opts)
+}
+
+func GenerationOptionsFromContext(ctx context.Context) GenerationOptions {
+	if ctx == nil {
+		return GenerationOptions{}
+	}
+	opts, _ := ctx.Value(GenerationOptionsKey).(GenerationOptions)
+	return opts
+}
 
 // MessageUser represents the user who sent a message
 type MessageUser struct {

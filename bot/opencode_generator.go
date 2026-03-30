@@ -397,7 +397,7 @@ func (g *OpenCodeGenerator) GenerateRenderStream(
 		return outCh, nil
 	}
 
-	prompt := buildPrompt(message, history, includeHistory)
+	prompt := buildPrompt(ctx, message, history, includeHistory)
 	outCh, err := postPromptWithStream(sessionID, prompt)
 	if err == nil {
 		return outCh, nil
@@ -425,7 +425,7 @@ func (g *OpenCodeGenerator) GenerateRenderStream(
 	}
 	conv.setSessionID(newSessionID)
 	includeHistory = true
-	retryPrompt := buildPrompt(message, history, includeHistory)
+	retryPrompt := buildPrompt(ctx, message, history, includeHistory)
 
 	outCh, err = postPromptWithStream(newSessionID, retryPrompt)
 	if err != nil {
@@ -509,7 +509,7 @@ func (g *OpenCodeGenerator) abortSession(ctx context.Context, sessionID string) 
 	if err != nil {
 		return err
 	}
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -540,7 +540,7 @@ func (g *OpenCodeGenerator) deleteSession(ctx context.Context, sessionID string)
 	if err != nil {
 		return err
 	}
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -574,7 +574,7 @@ func (g *OpenCodeGenerator) listChildSessions(
 	if err != nil {
 		return nil, err
 	}
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -644,7 +644,7 @@ func (g *OpenCodeGenerator) sessionBusy(ctx context.Context, sessionID string) (
 	if err != nil {
 		return false, false, err
 	}
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -796,9 +796,9 @@ func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (st
 	if err != nil {
 		return "", err
 	}
-	if g.sessionDir != "" {
+	if sessionDir := g.sessionDirForContext(ctx); sessionDir != "" {
 		query := base.Query()
-		query.Set("directory", g.sessionDir)
+		query.Set("directory", sessionDir)
 		base.RawQuery = query.Encode()
 	}
 	body, _ := json.Marshal(map[string]string{"title": title})
@@ -813,7 +813,7 @@ func (g *OpenCodeGenerator) createSession(ctx context.Context, title string) (st
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -852,7 +852,7 @@ func (g *OpenCodeGenerator) openEventStream(ctx context.Context) (*http.Response
 		return nil, err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -878,7 +878,7 @@ func (g *OpenCodeGenerator) promptAsync(ctx context.Context, sessionID, prompt s
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -1359,9 +1359,19 @@ func titleForMessage(text string) string {
 	return text
 }
 
-func buildPrompt(message Message, history []Message, includeHistory bool) string {
+func buildPrompt(
+	ctx context.Context,
+	message Message,
+	history []Message,
+	includeHistory bool,
+) string {
 	// Keep it simple and deterministic; only include history when bootstrapping a session.
 	var b strings.Builder
+	opts := GenerationOptionsFromContext(ctx)
+	if includeHistory && opts.BootstrapPrompt != "" {
+		b.WriteString(opts.BootstrapPrompt)
+		b.WriteString("\n\n")
+	}
 	if includeHistory && len(history) > 0 {
 		b.WriteString("Conversation history (oldest first):\n")
 		for _, m := range history {
@@ -1722,7 +1732,7 @@ func (g *OpenCodeGenerator) replyPermission(
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	g.applyRequestHeaders(req)
+	g.applyRequestHeaders(ctx, req)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
@@ -1740,12 +1750,20 @@ func (g *OpenCodeGenerator) replyPermission(
 	return nil
 }
 
-func (g *OpenCodeGenerator) applyRequestHeaders(req *http.Request) {
+func (g *OpenCodeGenerator) sessionDirForContext(ctx context.Context) string {
+	opts := GenerationOptionsFromContext(ctx)
+	if opts.SessionDir != "" {
+		return opts.SessionDir
+	}
+	return g.sessionDir
+}
+
+func (g *OpenCodeGenerator) applyRequestHeaders(ctx context.Context, req *http.Request) {
 	if g.auth != "" {
 		req.Header.Set("Authorization", g.auth)
 	}
-	if g.sessionDir != "" {
-		req.Header.Set("x-opencode-directory", g.sessionDir)
+	if sessionDir := g.sessionDirForContext(ctx); sessionDir != "" {
+		req.Header.Set("x-opencode-directory", sessionDir)
 	}
 }
 

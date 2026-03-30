@@ -124,7 +124,7 @@ func TestBuildPrompt_IncludeHistoryToggle(t *testing.T) {
 		{Text: "Hello", User: MessageUser{Username: "bob"}},
 	}
 
-	withHistory := buildPrompt(message, history, true)
+	withHistory := buildPrompt(context.Background(), message, history, true)
 	if !strings.Contains(withHistory, "Conversation history (oldest first):") {
 		t.Fatalf("expected history header in prompt: %q", withHistory)
 	}
@@ -132,12 +132,29 @@ func TestBuildPrompt_IncludeHistoryToggle(t *testing.T) {
 		t.Fatalf("expected history content in prompt: %q", withHistory)
 	}
 
-	withoutHistory := buildPrompt(message, history, false)
+	withoutHistory := buildPrompt(context.Background(), message, history, false)
 	if strings.Contains(withoutHistory, "Conversation history (oldest first):") {
 		t.Fatalf("did not expect history header in prompt: %q", withoutHistory)
 	}
 	if withoutHistory != "alice: What now?" {
 		t.Fatalf("prompt = %q, want %q", withoutHistory, "alice: What now?")
+	}
+}
+
+func TestBuildPrompt_IncludesBootstrapPromptOnlyOnBootstrap(t *testing.T) {
+	message := Message{Text: "What now?", User: MessageUser{Username: "alice"}}
+	ctx := WithGenerationOptions(context.Background(), GenerationOptions{
+		BootstrapPrompt: "You are active in the ops room.",
+	})
+
+	bootstrap := buildPrompt(ctx, message, nil, true)
+	if !strings.Contains(bootstrap, "You are active in the ops room.") {
+		t.Fatalf("bootstrap prompt missing: %q", bootstrap)
+	}
+
+	followup := buildPrompt(ctx, message, nil, false)
+	if strings.Contains(followup, "You are active in the ops room.") {
+		t.Fatalf("bootstrap prompt should not be present on follow-up: %q", followup)
 	}
 }
 
@@ -537,6 +554,33 @@ func TestOpenCodeGenerator_CreateSession_AddsDirectoryQueryWhenConfigured(t *tes
 	}
 	if gotHeader != "/tmp/foo" {
 		t.Fatalf("directory header = %q, want %q", gotHeader, "/tmp/foo")
+	}
+}
+
+func TestOpenCodeGenerator_CreateSession_UsesContextDirectoryOverride(t *testing.T) {
+	var gotQuery string
+	var gotHeader string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotHeader = r.Header.Get("x-opencode-directory")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"new-session"}`))
+	}))
+	defer srv.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
+	g := NewOpenCodeGenerator(srv.URL, "", "deny", "/tmp/default", srv.Client(), logger)
+	ctx := WithGenerationOptions(context.Background(), GenerationOptions{SessionDir: "/tmp/room"})
+
+	if _, err := g.createSession(ctx, "hello"); err != nil {
+		t.Fatalf("createSession() error = %v", err)
+	}
+	if gotQuery != "directory=%2Ftmp%2Froom" {
+		t.Fatalf("request query = %q, want %q", gotQuery, "directory=%2Ftmp%2Froom")
+	}
+	if gotHeader != "/tmp/room" {
+		t.Fatalf("directory header = %q, want %q", gotHeader, "/tmp/room")
 	}
 }
 

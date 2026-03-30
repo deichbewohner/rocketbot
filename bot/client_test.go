@@ -944,6 +944,175 @@ func TestClient_HandleRoomMessage_NonDMIgnored(t *testing.T) {
 	client.handleRoomMessage(msg)
 }
 
+func TestClient_ResolvePolicy_UsesRoomOverride(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	streamedOutput := false
+	threadDefault := true
+	client := &Client{
+		streamedOutput:  true,
+		threadDefault:   false,
+		bootstrapPrompt: "default prompt",
+		roomPolicies: map[string]RoomPolicy{
+			"room-123": {
+				Enabled:            true,
+				OpenCodeSessionDir: "/tmp/room-123",
+				BootstrapPrompt:    "room prompt",
+				StreamedOutput:     &streamedOutput,
+				ThreadDefault:      &threadDefault,
+			},
+		},
+		logger: logger,
+	}
+
+	policy, ok := client.resolvePolicy("room-123")
+	if !ok {
+		t.Fatal("expected room policy to resolve")
+	}
+	if policy.Scope != "room" {
+		t.Fatalf("Scope = %q, want room", policy.Scope)
+	}
+	if policy.SessionDir != "/tmp/room-123" {
+		t.Fatalf("SessionDir = %q, want %q", policy.SessionDir, "/tmp/room-123")
+	}
+	if policy.BootstrapPrompt != "room prompt" {
+		t.Fatalf("BootstrapPrompt = %q, want %q", policy.BootstrapPrompt, "room prompt")
+	}
+	if !policy.ThreadDefault {
+		t.Fatal("expected ThreadDefault override to be true")
+	}
+	if policy.StreamedOutput {
+		t.Fatal("expected StreamedOutput override to be false")
+	}
+}
+
+func TestMessageMentionsUsername(t *testing.T) {
+	tests := []struct {
+		name     string
+		msgData  map[string]interface{}
+		username string
+		want     bool
+	}{
+		{
+			name: "matches_mentions_array",
+			msgData: map[string]interface{}{
+				"mentions": []interface{}{map[string]interface{}{"username": "franziska"}},
+			},
+			username: "franziska",
+			want:     true,
+		},
+		{
+			name: "matches_text_mention",
+			msgData: map[string]interface{}{
+				"msg": "hello @franziska, can you help?",
+			},
+			username: "franziska",
+			want:     true,
+		},
+		{
+			name: "ignores_plain_name_without_at",
+			msgData: map[string]interface{}{
+				"msg": "hello franziska",
+			},
+			username: "franziska",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := messageMentionsUsername(tt.msgData, tt.username); got != tt.want {
+				t.Fatalf("messageMentionsUsername() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_ShouldRespondToRoomMessage(t *testing.T) {
+	client := &Client{username: "franziska", activeRoomThreads: make(map[string]bool)}
+	roomPolicy := resolvedPolicy{Scope: "room", RoomID: "room-1"}
+
+	if client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", Text: "hello"},
+		map[string]interface{}{"msg": "hello"},
+		roomPolicy,
+	) {
+		t.Fatal("expected unmentioned room root message to be ignored")
+	}
+
+	if !client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", Text: "@franziska hello"},
+		map[string]interface{}{"msg": "@franziska hello"},
+		roomPolicy,
+	) {
+		t.Fatal("expected mentioned room root message to be handled")
+	}
+
+	if client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", ThreadID: "thread-1", Text: "follow up"},
+		map[string]interface{}{"msg": "follow up"},
+		roomPolicy,
+	) {
+		t.Fatal("expected inactive room thread without mention to be ignored")
+	}
+
+	client.markActiveRoomThread("room-1", "thread-1")
+	if !client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", ThreadID: "thread-1", Text: "follow up"},
+		map[string]interface{}{"msg": "follow up"},
+		roomPolicy,
+	) {
+		t.Fatal("expected active room thread follow-up to be handled")
+	}
+}
+
+func TestStripLeadingUsernameMention(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		username string
+		want     string
+	}{
+		{
+			name:     "strip simple leading mention",
+			text:     "@franziska hello there",
+			username: "franziska",
+			want:     "hello there",
+		},
+		{
+			name:     "strip leading mention with punctuation",
+			text:     " @franziska: hello there",
+			username: "franziska",
+			want:     "hello there",
+		},
+		{
+			name:     "strip repeated leading mention",
+			text:     "@franziska @franziska hello",
+			username: "franziska",
+			want:     "hello",
+		},
+		{
+			name:     "keep middle mention",
+			text:     "hello @franziska there",
+			username: "franziska",
+			want:     "hello @franziska there",
+		},
+		{
+			name:     "keep trailing mention",
+			text:     "hello there @franziska",
+			username: "franziska",
+			want:     "hello there @franziska",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripLeadingUsernameMention(tt.text, tt.username); got != tt.want {
+				t.Fatalf("stripLeadingUsernameMention() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestClient_SetTypingIndicator(t *testing.T) {
 	logger := testutil.NewTestLogger(t)
 
@@ -1716,7 +1885,12 @@ func TestClient_HandleNonStreamingResponse(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			client.handleNonStreamingResponse(ctx, tt.message, []Message{})
+			client.handleNonStreamingResponse(
+				ctx,
+				tt.message,
+				[]Message{},
+				resolvedPolicy{ThreadDefault: tt.threadDefault},
+			)
 
 			if !tt.postErr && !postCalled {
 				t.Error("expected PostMessage to be called")
@@ -1831,7 +2005,13 @@ func TestClient_HandleStreamingResponse(t *testing.T) {
 			}
 
 			ctx := context.Background()
-			client.handleStreamingResponse(ctx, tt.message, []Message{}, generator)
+			client.handleStreamingResponse(
+				ctx,
+				tt.message,
+				[]Message{},
+				generator,
+				resolvedPolicy{ThreadDefault: tt.threadDefault},
+			)
 
 			if !tt.postErr && !postCalled {
 				t.Error("expected PostMessage to be called")
@@ -1979,6 +2159,8 @@ func TestClient_Start(t *testing.T) {
 		false,
 		logger,
 		"online",
+		"",
+		nil,
 	)
 	client.wsDialer = mockDialer
 
@@ -2074,6 +2256,8 @@ func TestClient_Start_FetchUsernameError(t *testing.T) {
 		false,
 		logger,
 		"",
+		"",
+		nil,
 	)
 
 	err := client.Run(context.Background())
@@ -2119,6 +2303,8 @@ func TestClient_Start_SetStatusError(t *testing.T) {
 		false,
 		logger,
 		"",
+		"",
+		nil,
 	)
 
 	err := client.Run(context.Background())
@@ -2172,6 +2358,8 @@ func TestClient_Start_GetSubscriptionsError(t *testing.T) {
 		false,
 		logger,
 		"",
+		"",
+		nil,
 	)
 
 	err := client.Run(context.Background())
@@ -2235,6 +2423,8 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 		false,
 		logger,
 		"",
+		"",
+		nil,
 	)
 	client.wsDialer = mockDialer
 
@@ -2326,6 +2516,8 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 				false,
 				logger,
 				"",
+				"",
+				nil,
 			)
 			client.wsDialer = mockDialer
 

@@ -39,24 +39,45 @@ func (d *defaultWSDialer) Dial(urlStr string, requestHeader map[string][]string)
 
 // Client represents a Rocket.Chat bot client
 type Client struct {
-	api            *APIClient
-	username       string
-	name           string
-	generator      ResponseGenerator
-	logger         *slog.Logger
-	streamedOutput bool
-	threadDefault  bool
-	statusMessage  string
+	api             *APIClient
+	username        string
+	name            string
+	generator       ResponseGenerator
+	logger          *slog.Logger
+	streamedOutput  bool
+	threadDefault   bool
+	statusMessage   string
+	bootstrapPrompt string
+	roomPolicies    map[string]RoomPolicy
 
-	ws        wsConn
-	wsDialer  wsDialer
-	wsMu      sync.Mutex
-	pending   map[string]string
-	pendingMu sync.Mutex // protects pending map
-	rooms     map[string]bool
-	dmRooms   map[string]bool
-	stopChan  chan struct{}
-	stopOnce  sync.Once
+	ws                  wsConn
+	wsDialer            wsDialer
+	wsMu                sync.Mutex
+	pending             map[string]string
+	pendingMu           sync.Mutex // protects pending map
+	rooms               map[string]bool
+	dmRooms             map[string]bool
+	activeRoomThreads   map[string]bool
+	activeRoomThreadsMu sync.RWMutex
+	stopChan            chan struct{}
+	stopOnce            sync.Once
+}
+
+type RoomPolicy struct {
+	Enabled            bool
+	OpenCodeSessionDir string
+	BootstrapPrompt    string
+	ThreadDefault      *bool
+	StreamedOutput     *bool
+}
+
+type resolvedPolicy struct {
+	Scope           string
+	RoomID          string
+	SessionDir      string
+	BootstrapPrompt string
+	ThreadDefault   bool
+	StreamedOutput  bool
 }
 
 var errStopRequested = errors.New("bot stop requested")
@@ -81,6 +102,8 @@ func NewClient(
 		threadDefault,
 		logger,
 		statusMessage,
+		"",
+		nil,
 	)
 }
 
@@ -94,21 +117,156 @@ func NewClientWithAPI(
 	threadDefault bool,
 	logger *slog.Logger,
 	statusMessage string,
+	bootstrapPrompt string,
+	roomPolicies map[string]RoomPolicy,
 ) *Client {
-	return &Client{
-		api:            api,
-		name:           name,
-		generator:      generator,
-		logger:         logger,
-		streamedOutput: streamedOutput,
-		threadDefault:  threadDefault,
-		statusMessage:  statusMessage,
-		wsDialer:       &defaultWSDialer{dialer: websocket.DefaultDialer},
-		pending:        make(map[string]string),
-		rooms:          make(map[string]bool),
-		dmRooms:        make(map[string]bool),
-		stopChan:       make(chan struct{}),
+	clonedPolicies := make(map[string]RoomPolicy, len(roomPolicies))
+	for roomID, policy := range roomPolicies {
+		clonedPolicies[roomID] = policy
 	}
+	return &Client{
+		api:               api,
+		name:              name,
+		generator:         generator,
+		logger:            logger,
+		streamedOutput:    streamedOutput,
+		threadDefault:     threadDefault,
+		statusMessage:     statusMessage,
+		bootstrapPrompt:   strings.TrimSpace(bootstrapPrompt),
+		roomPolicies:      clonedPolicies,
+		wsDialer:          &defaultWSDialer{dialer: websocket.DefaultDialer},
+		pending:           make(map[string]string),
+		rooms:             make(map[string]bool),
+		dmRooms:           make(map[string]bool),
+		activeRoomThreads: make(map[string]bool),
+		stopChan:          make(chan struct{}),
+	}
+}
+
+func roomThreadKey(roomID, threadID string) string {
+	return roomID + ":" + threadID
+}
+
+func (c *Client) isActiveRoomThread(roomID, threadID string) bool {
+	if roomID == "" || threadID == "" {
+		return false
+	}
+	c.activeRoomThreadsMu.RLock()
+	defer c.activeRoomThreadsMu.RUnlock()
+	return c.activeRoomThreads[roomThreadKey(roomID, threadID)]
+}
+
+func (c *Client) markActiveRoomThread(roomID, threadID string) {
+	if roomID == "" || threadID == "" {
+		return
+	}
+	c.activeRoomThreadsMu.Lock()
+	c.activeRoomThreads[roomThreadKey(roomID, threadID)] = true
+	c.activeRoomThreadsMu.Unlock()
+}
+
+func textMentionsUsername(text, username string) bool {
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username == "" {
+		return false
+	}
+	for _, field := range strings.Fields(strings.ToLower(text)) {
+		token := strings.Trim(field, "()[]{}<>:;,.!?\"'`")
+		if token == "@"+username {
+			return true
+		}
+	}
+	return false
+}
+
+func messageMentionsUsername(msgData map[string]interface{}, username string) bool {
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username == "" {
+		return false
+	}
+	if mentions, ok := msgData["mentions"].([]interface{}); ok {
+		for _, raw := range mentions {
+			m, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			mentioned, _ := m["username"].(string)
+			if strings.EqualFold(strings.TrimSpace(mentioned), username) {
+				return true
+			}
+		}
+	}
+	text, _ := msgData["msg"].(string)
+	return textMentionsUsername(text, username)
+}
+
+func stripLeadingUsernameMention(text, username string) string {
+	username = strings.TrimSpace(strings.ToLower(username))
+	if username == "" {
+		return strings.TrimSpace(text)
+	}
+
+	remaining := strings.TrimLeft(text, " \t\r\n")
+	mention := "@" + username
+	for {
+		lowerRemaining := strings.ToLower(remaining)
+		if !strings.HasPrefix(lowerRemaining, mention) {
+			break
+		}
+		remaining = remaining[len(mention):]
+		remaining = strings.TrimLeft(remaining, " \t\r\n:;,-")
+	}
+	return strings.TrimSpace(remaining)
+}
+
+func (c *Client) shouldRespondToRoomMessage(
+	message Message,
+	msgData map[string]interface{},
+	policy resolvedPolicy,
+) bool {
+	if policy.Scope != "room" {
+		return true
+	}
+	mentioned := messageMentionsUsername(msgData, c.username)
+	if message.ThreadID != "" {
+		return mentioned || c.isActiveRoomThread(message.RoomID, message.ThreadID)
+	}
+	return mentioned
+}
+
+func (c *Client) resolvePolicy(roomID string) (resolvedPolicy, bool) {
+	base := resolvedPolicy{
+		RoomID:          roomID,
+		SessionDir:      "",
+		BootstrapPrompt: c.bootstrapPrompt,
+		ThreadDefault:   c.threadDefault,
+		StreamedOutput:  c.streamedOutput,
+	}
+
+	if c.dmRooms[roomID] {
+		base.Scope = "dm"
+		return base, true
+	}
+
+	policy, ok := c.roomPolicies[roomID]
+	if !ok || !policy.Enabled {
+		return resolvedPolicy{}, false
+	}
+
+	base.Scope = "room"
+	if policy.OpenCodeSessionDir != "" {
+		base.SessionDir = policy.OpenCodeSessionDir
+	}
+	if policy.BootstrapPrompt != "" {
+		base.BootstrapPrompt = policy.BootstrapPrompt
+	}
+	if policy.ThreadDefault != nil {
+		base.ThreadDefault = *policy.ThreadDefault
+	}
+	if policy.StreamedOutput != nil {
+		base.StreamedOutput = *policy.StreamedOutput
+	}
+	return base, true
 }
 
 // ddpMessage represents a DDP protocol message
@@ -468,16 +626,31 @@ func (c *Client) handleRoomMessage(msg *ddpMessage) {
 		return
 	}
 
-	// Check if this is a DM by looking up the room ID
-	if c.dmRooms[roomID] {
-		// Extract message metadata
-		message := parseMessage(msgData)
-
-		// Handle response generation in a goroutine to avoid blocking
-		go c.handleDMResponse(message)
-	} else {
-		c.logger.Debug("ignoring non-DM message", "room_id", roomID)
+	policy, ok := c.resolvePolicy(roomID)
+	if !ok {
+		c.logger.Debug("ignoring inactive room message", "room_id", roomID)
+		return
 	}
+
+	message := parseMessage(msgData)
+	if !c.shouldRespondToRoomMessage(message, msgData, policy) {
+		if message.ThreadID != "" {
+			c.logger.Debug(
+				"ignoring room thread message without mention or active thread",
+				"room_id",
+				message.RoomID,
+				"thread_id",
+				message.ThreadID,
+			)
+		} else {
+			c.logger.Debug("ignoring room root message without mention", "room_id", message.RoomID)
+		}
+		return
+	}
+	if policy.Scope == "room" {
+		message.Text = stripLeadingUsernameMention(message.Text, c.username)
+	}
+	go c.handleResponse(message, policy)
 }
 
 // handleUserNotification processes user notifications (like subscription changes)
@@ -530,27 +703,48 @@ func (c *Client) handleUserNotification(msg *ddpMessage) {
 	}
 }
 
-// handleDMResponse handles generating and sending a response to a DM
-func (c *Client) handleDMResponse(message Message) {
+// handleResponse handles generating and sending a response within a resolved scope.
+func (c *Client) handleResponse(message Message, policy resolvedPolicy) {
 	// Create trace span for this request
 	tracer := otel.Tracer("rocketbot")
-	ctx, span := tracer.Start(context.Background(), "handle-dm")
+	ctx, span := tracer.Start(context.Background(), "handle-message")
 	defer span.End()
+	ctx = WithGenerationOptions(ctx, GenerationOptions{
+		Scope:           policy.Scope,
+		RoomID:          policy.RoomID,
+		SessionDir:      policy.SessionDir,
+		BootstrapPrompt: policy.BootstrapPrompt,
+	})
 
-	// Log the received DM with trace context
+	// Log the received message with trace context
+	scopeLabel := policy.Scope
+	if scopeLabel == "" {
+		scopeLabel = "unknown"
+	}
 	if message.ThreadID != "" {
 		c.logger.InfoContext(
 			ctx,
-			"received dm in thread",
+			"received message in thread",
 			"room_id",
 			message.RoomID,
 			"thread_id",
 			message.ThreadID,
+			"scope",
+			scopeLabel,
 			"user",
 			message.User.Username,
 		)
 	} else {
-		c.logger.InfoContext(ctx, "received dm", "room_id", message.RoomID, "user", message.User.Username)
+		c.logger.InfoContext(
+			ctx,
+			"received message",
+			"room_id",
+			message.RoomID,
+			"scope",
+			scopeLabel,
+			"user",
+			message.User.Username,
+		)
 	}
 
 	if cmd, ok := parseBotCommand(message.Text); ok {
@@ -560,12 +754,15 @@ func (c *Client) handleDMResponse(message Message) {
 
 	// Determine thread target once so history fetch, context keying, and replies align.
 	effectiveThreadID := message.ThreadID
-	if shouldCreateThread(message, c.threadDefault) {
+	if shouldCreateThread(message, policy.ThreadDefault) {
 		effectiveThreadID = message.ID
 	}
 
 	messageForGenerator := message
 	messageForGenerator.ThreadID = effectiveThreadID
+	if policy.Scope == "room" && effectiveThreadID != "" {
+		c.markActiveRoomThread(message.RoomID, effectiveThreadID)
+	}
 
 	historyLimit := 10
 	if hg, ok := c.generator.(HistoryAwareGenerator); ok {
@@ -612,15 +809,15 @@ func (c *Client) handleDMResponse(message Message) {
 	defer func() { _ = c.setTypingIndicator(message.RoomID, false) }()
 
 	// Check if generator supports streaming AND streamed output is enabled
-	if c.streamedOutput {
+	if policy.StreamedOutput {
 		if rg, ok := c.generator.(RenderStreamingGenerator); ok {
 			c.logger.DebugContext(ctx, "using rich render streaming response mode")
-			c.handleRenderStreamingResponse(ctx, messageForGenerator, filteredHistory, rg)
+			c.handleRenderStreamingResponse(ctx, messageForGenerator, filteredHistory, rg, policy)
 			return
 		}
 		if sg, ok := c.generator.(StreamingGenerator); ok {
 			c.logger.DebugContext(ctx, "using streaming response mode")
-			c.handleStreamingResponse(ctx, messageForGenerator, filteredHistory, sg)
+			c.handleStreamingResponse(ctx, messageForGenerator, filteredHistory, sg, policy)
 			return
 		}
 	}
@@ -630,9 +827,23 @@ func (c *Client) handleDMResponse(message Message) {
 		ctx,
 		"using non-streaming response mode",
 		"streamed_output_enabled",
-		c.streamedOutput,
+		policy.StreamedOutput,
 	)
-	c.handleNonStreamingResponse(ctx, messageForGenerator, filteredHistory)
+	c.handleNonStreamingResponse(ctx, messageForGenerator, filteredHistory, policy)
+}
+
+func (c *Client) handleDMResponse(message Message) {
+	policy, ok := c.resolvePolicy(message.RoomID)
+	if !ok {
+		policy = resolvedPolicy{
+			Scope:           "dm",
+			RoomID:          message.RoomID,
+			BootstrapPrompt: c.bootstrapPrompt,
+			ThreadDefault:   c.threadDefault,
+			StreamedOutput:  c.streamedOutput,
+		}
+	}
+	c.handleResponse(message, policy)
 }
 
 // handleRenderStreamingResponse handles structured streaming responses with
@@ -642,12 +853,13 @@ func (c *Client) handleRenderStreamingResponse(
 	message Message,
 	history []Message,
 	rg RenderStreamingGenerator,
+	policy resolvedPolicy,
 ) {
 	const noProgressNoticeAfter = 10 * time.Second
 	const noProgressNoticeEvery = 20 * time.Second
 
 	threadID := message.ThreadID
-	if shouldCreateThread(message, c.threadDefault) {
+	if shouldCreateThread(message, policy.ThreadDefault) {
 		threadID = message.ID
 	}
 
@@ -836,10 +1048,11 @@ func (c *Client) handleNonStreamingResponse(
 	ctx context.Context,
 	message Message,
 	history []Message,
+	policy resolvedPolicy,
 ) {
 	// Determine thread ID: use /thread command logic or threadDefault config
 	threadID := message.ThreadID
-	if shouldCreateThread(message, c.threadDefault) {
+	if shouldCreateThread(message, policy.ThreadDefault) {
 		threadID = message.ID
 	}
 
@@ -876,6 +1089,7 @@ func (c *Client) handleStreamingResponse(
 	message Message,
 	history []Message,
 	sg StreamingGenerator,
+	policy resolvedPolicy,
 ) {
 	const noChunkNoticeAfter = 10 * time.Second
 	const noChunkNoticeEvery = 20 * time.Second
@@ -883,7 +1097,7 @@ func (c *Client) handleStreamingResponse(
 
 	// Determine thread ID: use /thread command logic or threadDefault config
 	threadID := message.ThreadID
-	if shouldCreateThread(message, c.threadDefault) {
+	if shouldCreateThread(message, policy.ThreadDefault) {
 		threadID = message.ID
 	}
 

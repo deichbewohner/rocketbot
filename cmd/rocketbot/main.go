@@ -76,19 +76,37 @@ func createBot(
 		return nil, err
 	}
 
-	client := bot.NewClient(
-		botCfg.URL,
-		botCfg.UserID,
-		botCfg.Token,
+	api := bot.NewAPIClient(botCfg.URL, botCfg.UserID, botCfg.Token, httpClient, botLogger)
+	client := bot.NewClientWithAPI(
+		api,
 		slug,
 		generator,
 		botCfg.StreamedOutput,
 		botCfg.ThreadDefault,
 		botLogger,
 		botCfg.StatusMessage,
+		botCfg.BootstrapPrompt,
+		mapRoomPolicies(botCfg.RoomPolicies),
 	)
 
 	return client, nil
+}
+
+func mapRoomPolicies(src map[string]config.RoomPolicyConfig) map[string]bot.RoomPolicy {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]bot.RoomPolicy, len(src))
+	for roomID, policy := range src {
+		dst[roomID] = bot.RoomPolicy{
+			Enabled:            policy.Enabled,
+			OpenCodeSessionDir: policy.OpenCodeSessionDir,
+			BootstrapPrompt:    policy.BootstrapPrompt,
+			ThreadDefault:      policy.ThreadDefault,
+			StreamedOutput:     policy.StreamedOutput,
+		}
+	}
+	return dst
 }
 
 func newGenerator(

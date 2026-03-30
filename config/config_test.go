@@ -236,6 +236,65 @@ func TestLoad_OpenCodeGenerator_AllowsSessionDir(t *testing.T) {
 	}
 }
 
+func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_BOOTSTRAP_PROMPT", "You are Franziska.")
+	t.Setenv(
+		"BOT1_ROOM_POLICIES_JSON",
+		`{"rooms":{"room-123":{"enabled":true,"opencodeSessionDir":"/tmp/room-123","bootstrapPrompt":"Room-specific prompt","threadDefault":true,"streamedOutput":false}}}`,
+	)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.BootstrapPrompt != "You are Franziska." {
+		t.Fatalf("BootstrapPrompt = %q, want %q", bot.BootstrapPrompt, "You are Franziska.")
+	}
+	policy, ok := bot.RoomPolicies["room-123"]
+	if !ok {
+		t.Fatal("expected room policy for room-123")
+	}
+	if !policy.Enabled {
+		t.Fatal("expected room policy to be enabled")
+	}
+	if policy.OpenCodeSessionDir != "/tmp/room-123" {
+		t.Fatalf("OpenCodeSessionDir = %q, want %q", policy.OpenCodeSessionDir, "/tmp/room-123")
+	}
+	if policy.BootstrapPrompt != "Room-specific prompt" {
+		t.Fatalf("BootstrapPrompt = %q, want %q", policy.BootstrapPrompt, "Room-specific prompt")
+	}
+	if policy.ThreadDefault == nil || !*policy.ThreadDefault {
+		t.Fatal("expected ThreadDefault override to be true")
+	}
+	if policy.StreamedOutput == nil || *policy.StreamedOutput {
+		t.Fatal("expected StreamedOutput override to be false")
+	}
+}
+
+func TestLoad_RoomPoliciesJSON_Invalid(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_ROOM_POLICIES_JSON", `{"rooms":{"room-123":{"enabled":true,"unknown":1}}}`)
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected Load() to fail")
+	}
+	if !strings.Contains(err.Error(), "BOT1_ROOM_POLICIES_JSON invalid") {
+		t.Fatalf("error = %q, want invalid room policies message", err)
+	}
+}
+
 func TestLoad_OpenCodeGenerator_PermissionModeValidation(t *testing.T) {
 	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com")

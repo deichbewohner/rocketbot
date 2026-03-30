@@ -77,6 +77,8 @@ func TestIntegration_BotEndToEnd(t *testing.T) {
 		false,
 		logger,
 		"online",
+		"",
+		nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -442,6 +444,8 @@ func TestIntegration_BotStreaming(t *testing.T) {
 		false,
 		logger,
 		"online",
+		"",
+		nil,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

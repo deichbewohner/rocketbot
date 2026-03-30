@@ -104,6 +104,14 @@ func (g *WebhookGenerator) GenerateResponseStream(
 	if replyRoomID, ok := ctx.Value(ReplyRoomIDKey).(string); ok {
 		payload["replyRoomId"] = replyRoomID
 	}
+	if opts := GenerationOptionsFromContext(ctx); opts != (GenerationOptions{}) {
+		payload["options"] = map[string]interface{}{
+			"scope":           opts.Scope,
+			"roomId":          opts.RoomID,
+			"sessionDir":      opts.SessionDir,
+			"bootstrapPrompt": opts.BootstrapPrompt,
+		}
+	}
 
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
