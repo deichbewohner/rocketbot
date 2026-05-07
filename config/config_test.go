@@ -38,6 +38,9 @@ func TestLoad_SingleBot(t *testing.T) {
 	if !bot.StreamedOutput {
 		t.Error("StreamedOutput = false, want true (default)")
 	}
+	if bot.RenderMode != "detailed" {
+		t.Errorf("RenderMode = %q, want %q", bot.RenderMode, "detailed")
+	}
 }
 
 func TestLoad_MultipleBots(t *testing.T) {
@@ -243,9 +246,10 @@ func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
 	t.Setenv("BOT1_TOKEN", "token456")
 	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
 	t.Setenv("BOT1_BOOTSTRAP_PROMPT", "You are Franziska.")
+	t.Setenv("BOT1_RENDER_MODE", "concise")
 	t.Setenv(
 		"BOT1_ROOM_POLICIES_JSON",
-		`{"rooms":{"room-123":{"enabled":true,"opencodeSessionDir":"/tmp/room-123","bootstrapPrompt":"Room-specific prompt","threadDefault":true,"streamedOutput":false}}}`,
+		`{"rooms":{"room-123":{"enabled":true,"opencodeSessionDir":"/tmp/room-123","bootstrapPrompt":"Room-specific prompt","renderMode":"detailed","threadDefault":true,"streamedOutput":false}}}`,
 	)
 
 	cfg, err := Load()
@@ -256,6 +260,9 @@ func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
 	bot, _ := cfg.Get(0)
 	if bot.BootstrapPrompt != "You are Franziska." {
 		t.Fatalf("BootstrapPrompt = %q, want %q", bot.BootstrapPrompt, "You are Franziska.")
+	}
+	if bot.RenderMode != "concise" {
+		t.Fatalf("RenderMode = %q, want %q", bot.RenderMode, "concise")
 	}
 	policy, ok := bot.RoomPolicies["room-123"]
 	if !ok {
@@ -270,11 +277,31 @@ func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
 	if policy.BootstrapPrompt != "Room-specific prompt" {
 		t.Fatalf("BootstrapPrompt = %q, want %q", policy.BootstrapPrompt, "Room-specific prompt")
 	}
+	if policy.RenderMode != "detailed" {
+		t.Fatalf("RenderMode = %q, want %q", policy.RenderMode, "detailed")
+	}
 	if policy.ThreadDefault == nil || !*policy.ThreadDefault {
 		t.Fatal("expected ThreadDefault override to be true")
 	}
 	if policy.StreamedOutput == nil || *policy.StreamedOutput {
 		t.Fatal("expected StreamedOutput override to be false")
+	}
+}
+
+func TestLoad_InvalidRenderModeErrors(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_GENERATOR_TYPE", "opencode")
+	t.Setenv("BOT1_RENDER_MODE", "verbose")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want render mode validation error")
+	}
+	if !strings.Contains(err.Error(), "BOT1_RENDER_MODE must be") {
+		t.Fatalf("Load() error = %v, want render mode validation error", err)
 	}
 }
 

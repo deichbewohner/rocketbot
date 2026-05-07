@@ -45,6 +45,7 @@ type Client struct {
 	generator       ResponseGenerator
 	logger          *slog.Logger
 	streamedOutput  bool
+	renderMode      string
 	threadDefault   bool
 	statusMessage   string
 	bootstrapPrompt string
@@ -67,6 +68,7 @@ type RoomPolicy struct {
 	Enabled            bool
 	OpenCodeSessionDir string
 	BootstrapPrompt    string
+	RenderMode         string
 	ThreadDefault      *bool
 	StreamedOutput     *bool
 }
@@ -76,6 +78,7 @@ type resolvedPolicy struct {
 	RoomID          string
 	SessionDir      string
 	BootstrapPrompt string
+	RenderMode      string
 	ThreadDefault   bool
 	StreamedOutput  bool
 }
@@ -89,6 +92,7 @@ func NewClient(
 	baseURL, userID, token, name string,
 	generator ResponseGenerator,
 	streamedOutput bool,
+	renderMode string,
 	threadDefault bool,
 	logger *slog.Logger,
 	statusMessage string,
@@ -99,6 +103,7 @@ func NewClient(
 		name,
 		generator,
 		streamedOutput,
+		renderMode,
 		threadDefault,
 		logger,
 		statusMessage,
@@ -114,6 +119,7 @@ func NewClientWithAPI(
 	name string,
 	generator ResponseGenerator,
 	streamedOutput bool,
+	renderMode string,
 	threadDefault bool,
 	logger *slog.Logger,
 	statusMessage string,
@@ -130,6 +136,7 @@ func NewClientWithAPI(
 		generator:         generator,
 		logger:            logger,
 		streamedOutput:    streamedOutput,
+		renderMode:        normalizeRenderMode(renderMode),
 		threadDefault:     threadDefault,
 		statusMessage:     statusMessage,
 		bootstrapPrompt:   strings.TrimSpace(bootstrapPrompt),
@@ -140,6 +147,15 @@ func NewClientWithAPI(
 		dmRooms:           make(map[string]bool),
 		activeRoomThreads: make(map[string]bool),
 		stopChan:          make(chan struct{}),
+	}
+}
+
+func normalizeRenderMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "concise":
+		return "concise"
+	default:
+		return "detailed"
 	}
 }
 
@@ -239,6 +255,7 @@ func (c *Client) resolvePolicy(roomID string) (resolvedPolicy, bool) {
 		RoomID:          roomID,
 		SessionDir:      "",
 		BootstrapPrompt: c.bootstrapPrompt,
+		RenderMode:      c.renderMode,
 		ThreadDefault:   c.threadDefault,
 		StreamedOutput:  c.streamedOutput,
 	}
@@ -259,6 +276,9 @@ func (c *Client) resolvePolicy(roomID string) (resolvedPolicy, bool) {
 	}
 	if policy.BootstrapPrompt != "" {
 		base.BootstrapPrompt = policy.BootstrapPrompt
+	}
+	if policy.RenderMode != "" {
+		base.RenderMode = normalizeRenderMode(policy.RenderMode)
 	}
 	if policy.ThreadDefault != nil {
 		base.ThreadDefault = *policy.ThreadDefault
@@ -839,6 +859,7 @@ func (c *Client) handleDMResponse(message Message) {
 			Scope:           "dm",
 			RoomID:          message.RoomID,
 			BootstrapPrompt: c.bootstrapPrompt,
+			RenderMode:      c.renderMode,
 			ThreadDefault:   c.threadDefault,
 			StreamedOutput:  c.streamedOutput,
 		}
@@ -880,7 +901,7 @@ func (c *Client) handleRenderStreamingResponse(
 	}
 	c.logger.DebugContext(ctx, "generator render stream started")
 
-	renderer := NewProgressiveRenderer()
+	renderer := NewProgressiveRenderer(policy.RenderMode)
 	lastSent := "..."
 	dirty := false
 	lastProgressAt := time.Now()

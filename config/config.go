@@ -13,6 +13,7 @@ type RoomPolicyConfig struct {
 	Enabled            bool   `json:"enabled"`
 	OpenCodeSessionDir string `json:"opencodeSessionDir"`
 	BootstrapPrompt    string `json:"bootstrapPrompt"`
+	RenderMode         string `json:"renderMode"`
 	ThreadDefault      *bool  `json:"threadDefault"`
 	StreamedOutput     *bool  `json:"streamedOutput"`
 }
@@ -36,6 +37,7 @@ type BotConfig struct {
 	ThreadDefault          bool   // Always reply in threads (default: false)
 	StatusMessage          string // Custom status message (optional, defaults to "Bot is active")
 	BootstrapPrompt        string // Optional prompt prepended only when starting a new conversation
+	RenderMode             string // Message render mode for structured generator output (detailed, concise)
 	RoomPolicies           map[string]RoomPolicyConfig
 }
 
@@ -94,6 +96,7 @@ func Load() (*Config, error) {
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
 		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
 		bootstrapPrompt := strings.TrimSpace(os.Getenv(prefix + "BOOTSTRAP_PROMPT"))
+		renderMode := strings.TrimSpace(os.Getenv(prefix + "RENDER_MODE"))
 		roomPoliciesJSON := strings.TrimSpace(os.Getenv(prefix + "ROOM_POLICIES_JSON"))
 
 		// Validate required fields
@@ -242,6 +245,21 @@ func Load() (*Config, error) {
 			enableThreadDefault = threadDefault == "true" || threadDefault == "1"
 		}
 
+		if renderMode == "" {
+			renderMode = "detailed"
+		}
+		switch renderMode {
+		case "detailed", "concise":
+		default:
+			return nil, fmt.Errorf(
+				"%sRENDER_MODE must be %q or %q (got %q)",
+				prefix,
+				"detailed",
+				"concise",
+				renderMode,
+			)
+		}
+
 		roomPolicies, err := parseRoomPoliciesJSON(prefix, roomPoliciesJSON)
 		if err != nil {
 			return nil, err
@@ -265,6 +283,7 @@ func Load() (*Config, error) {
 			ThreadDefault:          enableThreadDefault,
 			StatusMessage:          statusMessage,
 			BootstrapPrompt:        bootstrapPrompt,
+			RenderMode:             renderMode,
 			RoomPolicies:           roomPolicies,
 		})
 	}
@@ -304,6 +323,7 @@ func parseRoomPoliciesJSON(prefix, raw string) (map[string]RoomPolicyConfig, err
 			continue
 		}
 		if policy.OpenCodeSessionDir == "" && policy.BootstrapPrompt == "" &&
+			policy.RenderMode == "" &&
 			policy.ThreadDefault == nil && policy.StreamedOutput == nil {
 			return nil, fmt.Errorf(
 				"%sROOM_POLICIES_JSON room %q must override at least one setting when enabled",
@@ -313,6 +333,19 @@ func parseRoomPoliciesJSON(prefix, raw string) (map[string]RoomPolicyConfig, err
 		}
 		policy.OpenCodeSessionDir = strings.TrimSpace(policy.OpenCodeSessionDir)
 		policy.BootstrapPrompt = strings.TrimSpace(policy.BootstrapPrompt)
+		policy.RenderMode = strings.TrimSpace(policy.RenderMode)
+		switch policy.RenderMode {
+		case "", "detailed", "concise":
+		default:
+			return nil, fmt.Errorf(
+				"%sROOM_POLICIES_JSON room %q renderMode must be %q or %q (got %q)",
+				prefix,
+				roomID,
+				"detailed",
+				"concise",
+				policy.RenderMode,
+			)
+		}
 		payload.Rooms[roomID] = policy
 	}
 

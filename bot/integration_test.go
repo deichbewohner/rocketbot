@@ -74,6 +74,7 @@ func TestIntegration_BotEndToEnd(t *testing.T) {
 		"TestBot",
 		generator,
 		false, // non-streaming for this test
+		"detailed",
 		false,
 		logger,
 		"online",
@@ -441,6 +442,7 @@ func TestIntegration_BotStreaming(t *testing.T) {
 		"TestBot",
 		generator,
 		true, // streamedOutput: enables ticker batching
+		"detailed",
 		false,
 		logger,
 		"online",

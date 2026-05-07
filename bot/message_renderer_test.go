@@ -6,14 +6,14 @@ import (
 )
 
 func TestProgressiveRenderer_InitialRenderIsPlaceholder(t *testing.T) {
-	r := NewProgressiveRenderer()
+	r := NewProgressiveRenderer("detailed")
 	if got := r.Render(); got != "..." {
 		t.Fatalf("Render() = %q, want %q", got, "...")
 	}
 }
 
 func TestProgressiveRenderer_ToolLineAndAnswerFlow(t *testing.T) {
-	r := NewProgressiveRenderer()
+	r := NewProgressiveRenderer("detailed")
 
 	changed := r.Apply(RenderEvent{
 		Type:     RenderEventToolStart,
@@ -49,7 +49,7 @@ func TestProgressiveRenderer_ToolLineAndAnswerFlow(t *testing.T) {
 }
 
 func TestProgressiveRenderer_OneLinePerToolCall(t *testing.T) {
-	r := NewProgressiveRenderer()
+	r := NewProgressiveRenderer("detailed")
 
 	_ = r.Apply(RenderEvent{
 		Type:     RenderEventToolStart,
@@ -77,7 +77,7 @@ func TestProgressiveRenderer_OneLinePerToolCall(t *testing.T) {
 }
 
 func TestProgressiveRenderer_ErrorLineIsShort(t *testing.T) {
-	r := NewProgressiveRenderer()
+	r := NewProgressiveRenderer("detailed")
 
 	_ = r.Apply(RenderEvent{
 		Type:     RenderEventToolStart,
@@ -108,7 +108,7 @@ func TestProgressiveRenderer_ErrorLineIsShort(t *testing.T) {
 }
 
 func TestProgressiveRenderer_CompletedToolRemainsVisible(t *testing.T) {
-	r := NewProgressiveRenderer()
+	r := NewProgressiveRenderer("detailed")
 
 	_ = r.Apply(RenderEvent{
 		Type:     RenderEventToolStart,
@@ -132,5 +132,54 @@ func TestProgressiveRenderer_CompletedToolRemainsVisible(t *testing.T) {
 	}
 	if !strings.Contains(got, "Final answer.") {
 		t.Fatalf("expected final answer text: %q", got)
+	}
+}
+
+func TestProgressiveRenderer_ConciseModeCountsCategories(t *testing.T) {
+	r := NewProgressiveRenderer("concise")
+
+	_ = r.Apply(RenderEvent{
+		Type:     RenderEventToolStart,
+		CallID:   "skill-1",
+		ToolName: "read",
+		Path:     "/tmp/skills/openai-docs/SKILL.md",
+		Status:   "running",
+	})
+	_ = r.Apply(RenderEvent{
+		Type:     RenderEventToolStart,
+		CallID:   "read-1",
+		ToolName: "read",
+		Path:     "bot/client.go",
+		Status:   "running",
+	})
+	_ = r.Apply(RenderEvent{
+		Type:     RenderEventToolStart,
+		CallID:   "read-2",
+		ToolName: "read",
+		Path:     "config/config.go",
+		Status:   "running",
+	})
+	_ = r.Apply(RenderEvent{
+		Type:     RenderEventToolStart,
+		CallID:   "tool-1",
+		ToolName: "bash",
+		Command:  "go test ./...",
+		Status:   "running",
+	})
+	_ = r.Apply(RenderEvent{
+		Type:     RenderEventToolStart,
+		CallID:   "tool-2",
+		ToolName: "grep",
+		Query:    "render",
+		Status:   "running",
+	})
+	_ = r.Apply(RenderEvent{Type: RenderEventTextDelta, PartID: "p1", Text: "Answer"})
+
+	got := r.Render()
+	if !strings.Contains(got, "> `1 skill, 2 reads, 2 tools`") {
+		t.Fatalf("expected concise category summary, got %q", got)
+	}
+	if !strings.Contains(got, "Answer") {
+		t.Fatalf("expected final answer text, got %q", got)
 	}
 }

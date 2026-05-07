@@ -82,6 +82,7 @@ func createBot(
 		slug,
 		generator,
 		botCfg.StreamedOutput,
+		botCfg.RenderMode,
 		botCfg.ThreadDefault,
 		botLogger,
 		botCfg.StatusMessage,
@@ -102,6 +103,7 @@ func mapRoomPolicies(src map[string]config.RoomPolicyConfig) map[string]bot.Room
 			Enabled:            policy.Enabled,
 			OpenCodeSessionDir: policy.OpenCodeSessionDir,
 			BootstrapPrompt:    policy.BootstrapPrompt,
+			RenderMode:         policy.RenderMode,
 			ThreadDefault:      policy.ThreadDefault,
 			StreamedOutput:     policy.StreamedOutput,
 		}

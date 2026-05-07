@@ -1,6 +1,9 @@
 package bot
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // MessageRenderer renders a full Rocket.Chat message from structured events.
 type MessageRenderer interface {
@@ -9,10 +12,11 @@ type MessageRenderer interface {
 }
 
 type toolCallView struct {
-	ID      string
-	Summary string
-	Status  string
-	Failed  bool
+	ID       string
+	Summary  string
+	Status   string
+	Failed   bool
+	Category string
 }
 
 // ProgressiveRenderer keeps tool lines plus assistant answer text.
@@ -21,11 +25,13 @@ type ProgressiveRenderer struct {
 	toolIndex map[string]int
 	answer    string
 	done      bool
+	mode      string
 }
 
-func NewProgressiveRenderer() *ProgressiveRenderer {
+func NewProgressiveRenderer(mode string) *ProgressiveRenderer {
 	return &ProgressiveRenderer{
 		toolIndex: make(map[string]int),
+		mode:      normalizeRenderMode(mode),
 	}
 }
 
@@ -70,6 +76,7 @@ func (r *ProgressiveRenderer) upsertTool(event RenderEvent) bool {
 
 	summary := summarizeToolEvent(event)
 	failed := event.Type == RenderEventToolError || strings.EqualFold(event.Status, "error")
+	category := classifyRenderEventTool(event)
 
 	if idx, ok := r.toolIndex[id]; ok {
 		changed := false
@@ -85,28 +92,41 @@ func (r *ProgressiveRenderer) upsertTool(event RenderEvent) bool {
 			r.tools[idx].Failed = failed
 			changed = true
 		}
+		if category != "" && r.tools[idx].Category != category {
+			r.tools[idx].Category = category
+			changed = true
+		}
 		return changed
 	}
 
 	r.toolIndex[id] = len(r.tools)
 	r.tools = append(r.tools, toolCallView{
-		ID:      id,
-		Summary: summary,
-		Status:  event.Status,
-		Failed:  failed,
+		ID:       id,
+		Summary:  summary,
+		Status:   event.Status,
+		Failed:   failed,
+		Category: category,
 	})
 	return true
 }
 
 func (r *ProgressiveRenderer) Render() string {
 	var b strings.Builder
-	for _, t := range r.tools {
-		if strings.TrimSpace(t.Summary) == "" {
-			continue
+	if r.mode == "concise" {
+		if summary := r.renderConciseSummary(); summary != "" {
+			b.WriteString("> `")
+			b.WriteString(summary)
+			b.WriteString("`\n")
 		}
-		b.WriteString("> `")
-		b.WriteString(t.Summary)
-		b.WriteString("`\n")
+	} else {
+		for _, t := range r.tools {
+			if strings.TrimSpace(t.Summary) == "" {
+				continue
+			}
+			b.WriteString("> `")
+			b.WriteString(t.Summary)
+			b.WriteString("`\n")
+		}
 	}
 
 	body := strings.TrimSpace(r.answer)
@@ -119,4 +139,52 @@ func (r *ProgressiveRenderer) Render() string {
 	}
 	b.WriteString(body)
 	return b.String()
+}
+
+func (r *ProgressiveRenderer) renderConciseSummary() string {
+	skills := 0
+	reads := 0
+	tools := 0
+	for _, t := range r.tools {
+		switch t.Category {
+		case "skill":
+			skills++
+		case "read":
+			reads++
+		default:
+			tools++
+		}
+	}
+
+	parts := make([]string, 0, 3)
+	if skills > 0 {
+		parts = append(parts, formatCount(skills, "skill", "skills"))
+	}
+	if reads > 0 {
+		parts = append(parts, formatCount(reads, "read", "reads"))
+	}
+	if tools > 0 {
+		parts = append(parts, formatCount(tools, "tool", "tools"))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func classifyRenderEventTool(event RenderEvent) string {
+	if strings.EqualFold(strings.TrimSpace(event.ToolName), "read") {
+		path := strings.ToLower(strings.TrimSpace(event.Path))
+		title := strings.ToLower(strings.TrimSpace(event.Title))
+		if strings.HasSuffix(path, "/skill.md") || path == "skill.md" || strings.Contains(path, "/skills/") ||
+			strings.Contains(title, "skill") {
+			return "skill"
+		}
+		return "read"
+	}
+	return "tool"
+}
+
+func formatCount(n int, singular, plural string) string {
+	if n == 1 {
+		return "1 " + singular
+	}
+	return strconv.Itoa(n) + " " + plural
 }
