@@ -10,12 +10,13 @@ import (
 )
 
 type RoomPolicyConfig struct {
-	Enabled            bool   `json:"enabled"`
-	OpenCodeSessionDir string `json:"opencodeSessionDir"`
-	BootstrapPrompt    string `json:"bootstrapPrompt"`
-	RenderMode         string `json:"renderMode"`
-	ThreadDefault      *bool  `json:"threadDefault"`
-	StreamedOutput     *bool  `json:"streamedOutput"`
+	Enabled             bool   `json:"enabled"`
+	OpenCodeSessionDir  string `json:"opencodeSessionDir"`
+	BootstrapPrompt     string `json:"bootstrapPrompt"`
+	RenderMode          string `json:"renderMode"`
+	ActiveThreadTrigger string `json:"activeThreadTrigger"`
+	ThreadDefault       *bool  `json:"threadDefault"`
+	StreamedOutput      *bool  `json:"streamedOutput"`
 }
 
 // BotConfig holds configuration for a single bot instance
@@ -35,6 +36,7 @@ type BotConfig struct {
 	ParserType             string // Stream parser type for webhook generator (e.g., "n8n")
 	APIToken               string // HTTP API authentication token
 	ThreadDefault          bool   // Always reply in threads (default: false)
+	ActiveThreadTrigger    string // Active room thread follow-up policy (auto, mention_only)
 	StatusMessage          string // Custom status message (optional, defaults to "Bot is active")
 	BootstrapPrompt        string // Optional prompt prepended only when starting a new conversation
 	RenderMode             string // Message render mode for structured generator output (detailed, concise)
@@ -47,6 +49,19 @@ type Config struct {
 }
 
 var slugRegex = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+func normalizeActiveThreadTrigger(raw string) (string, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		value = "auto"
+	}
+	switch value {
+	case "auto", "mention_only":
+		return value, nil
+	default:
+		return "", fmt.Errorf("must be %q or %q (got %q)", "auto", "mention_only", raw)
+	}
+}
 
 // validateSlug checks if a slug is URL-safe (lowercase alphanumeric with hyphens)
 func validateSlug(slug string) error {
@@ -94,6 +109,7 @@ func Load() (*Config, error) {
 		opencodePermissionMode := os.Getenv(prefix + "OPENCODE_PERMISSION_MODE")
 		apiToken := os.Getenv(prefix + "API_TOKEN")
 		threadDefault := os.Getenv(prefix + "THREAD_DEFAULT")
+		activeThreadTrigger := os.Getenv(prefix + "ACTIVE_THREAD_TRIGGER")
 		statusMessage := os.Getenv(prefix + "STATUS_MESSAGE")
 		bootstrapPrompt := strings.TrimSpace(os.Getenv(prefix + "BOOTSTRAP_PROMPT"))
 		renderMode := strings.TrimSpace(os.Getenv(prefix + "RENDER_MODE"))
@@ -244,6 +260,10 @@ func Load() (*Config, error) {
 		if threadDefault != "" {
 			enableThreadDefault = threadDefault == "true" || threadDefault == "1"
 		}
+		normalizedActiveThreadTrigger, err := normalizeActiveThreadTrigger(activeThreadTrigger)
+		if err != nil {
+			return nil, fmt.Errorf("%sACTIVE_THREAD_TRIGGER %w", prefix, err)
+		}
 
 		if renderMode == "" {
 			renderMode = "detailed"
@@ -281,6 +301,7 @@ func Load() (*Config, error) {
 			ParserType:             parserType,
 			APIToken:               apiToken,
 			ThreadDefault:          enableThreadDefault,
+			ActiveThreadTrigger:    normalizedActiveThreadTrigger,
 			StatusMessage:          statusMessage,
 			BootstrapPrompt:        bootstrapPrompt,
 			RenderMode:             renderMode,
@@ -323,7 +344,7 @@ func parseRoomPoliciesJSON(prefix, raw string) (map[string]RoomPolicyConfig, err
 			continue
 		}
 		if policy.OpenCodeSessionDir == "" && policy.BootstrapPrompt == "" &&
-			policy.RenderMode == "" &&
+			policy.RenderMode == "" && policy.ActiveThreadTrigger == "" &&
 			policy.ThreadDefault == nil && policy.StreamedOutput == nil {
 			return nil, fmt.Errorf(
 				"%sROOM_POLICIES_JSON room %q must override at least one setting when enabled",
@@ -334,6 +355,19 @@ func parseRoomPoliciesJSON(prefix, raw string) (map[string]RoomPolicyConfig, err
 		policy.OpenCodeSessionDir = strings.TrimSpace(policy.OpenCodeSessionDir)
 		policy.BootstrapPrompt = strings.TrimSpace(policy.BootstrapPrompt)
 		policy.RenderMode = strings.TrimSpace(policy.RenderMode)
+		policy.ActiveThreadTrigger = strings.TrimSpace(policy.ActiveThreadTrigger)
+		if policy.ActiveThreadTrigger != "" {
+			normalized, err := normalizeActiveThreadTrigger(policy.ActiveThreadTrigger)
+			if err != nil {
+				return nil, fmt.Errorf(
+					"%sROOM_POLICIES_JSON room %q activeThreadTrigger %w",
+					prefix,
+					roomID,
+					err,
+				)
+			}
+			policy.ActiveThreadTrigger = normalized
+		}
 		switch policy.RenderMode {
 		case "", "detailed", "concise":
 		default:

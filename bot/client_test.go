@@ -1028,8 +1028,11 @@ func TestMessageMentionsUsername(t *testing.T) {
 }
 
 func TestClient_ShouldRespondToRoomMessage(t *testing.T) {
-	client := &Client{username: "franziska", activeRoomThreads: make(map[string]bool)}
-	roomPolicy := resolvedPolicy{Scope: "room", RoomID: "room-1"}
+	client := &Client{
+		username:          "franziska",
+		activeRoomThreads: make(map[string]activeThreadState),
+	}
+	roomPolicy := resolvedPolicy{Scope: "room", RoomID: "room-1", ActiveThreadTrigger: "auto"}
 
 	if client.shouldRespondToRoomMessage(
 		Message{RoomID: "room-1", Text: "hello"},
@@ -1055,13 +1058,69 @@ func TestClient_ShouldRespondToRoomMessage(t *testing.T) {
 		t.Fatal("expected inactive room thread without mention to be ignored")
 	}
 
-	client.markActiveRoomThread("room-1", "thread-1")
+	client.markActiveRoomThread("room-1", "thread-1", "thread-1")
 	if !client.shouldRespondToRoomMessage(
 		Message{RoomID: "room-1", ThreadID: "thread-1", Text: "follow up"},
 		map[string]interface{}{"msg": "follow up"},
 		roomPolicy,
 	) {
 		t.Fatal("expected active room thread follow-up to be handled")
+	}
+
+	mentionOnlyPolicy := resolvedPolicy{
+		Scope:               "room",
+		RoomID:              "room-1",
+		ActiveThreadTrigger: "mention_only",
+	}
+	if client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", ThreadID: "thread-1", Text: "follow up"},
+		map[string]interface{}{"msg": "follow up"},
+		mentionOnlyPolicy,
+	) {
+		t.Fatal("expected active mention_only thread follow-up without mention to be ignored")
+	}
+	if !client.shouldRespondToRoomMessage(
+		Message{RoomID: "room-1", ThreadID: "thread-1", Text: "@franziska follow up"},
+		map[string]interface{}{"msg": "@franziska follow up"},
+		mentionOnlyPolicy,
+	) {
+		t.Fatal("expected active mention_only thread follow-up with mention to be handled")
+	}
+}
+
+func TestCollectMissedThreadMessages(t *testing.T) {
+	threadHistory := []Message{
+		{ID: "root", User: MessageUser{ID: "user-root", Username: "alice"}, Text: "root"},
+		{ID: "m1", User: MessageUser{ID: "user-1", Username: "alice"}, Text: "first"},
+		{ID: "bot-1", User: MessageUser{ID: "bot-user", Username: "bot"}, Text: "reply"},
+		{ID: "m2", User: MessageUser{ID: "user-2", Username: "bob"}, Text: "second"},
+		{ID: "m3", User: MessageUser{ID: "user-1", Username: "alice"}, Text: "third"},
+		{ID: "m3", User: MessageUser{ID: "user-1", Username: "alice"}, Text: "third"},
+	}
+
+	missed := collectMissedThreadMessages(threadHistory, "bot-1", "bot-user")
+	if len(missed) != 2 {
+		t.Fatalf("len(missed) = %d, want 2", len(missed))
+	}
+	if missed[0].ID != "m2" || missed[1].ID != "m3" {
+		t.Fatalf("missed IDs = [%s %s], want [m2 m3]", missed[0].ID, missed[1].ID)
+	}
+}
+
+func TestSynthesizeMissedThreadMessagesPrompt(t *testing.T) {
+	prompt := synthesizeMissedThreadMessagesPrompt([]Message{
+		{ID: "m1", User: MessageUser{Username: "alice"}, Text: "first"},
+		{ID: "m2", User: MessageUser{Username: "bob"}, Text: "second"},
+	})
+
+	if !strings.Contains(prompt, "Messages in the thread since your last response:") {
+		t.Fatalf("prompt = %q, want synthesized header", prompt)
+	}
+	if !strings.Contains(prompt, "- alice: first") || !strings.Contains(prompt, "- bob: second") {
+		t.Fatalf("prompt = %q, want both missed messages", prompt)
+	}
+	if strings.Count(prompt, "- bob: second") != 2 {
+		t.Fatalf("prompt = %q, want latest message included once in each section", prompt)
 	}
 }
 
@@ -1629,6 +1688,155 @@ func TestClient_HandleDMResponse_ThreadHistory(t *testing.T) {
 	}
 }
 
+func TestClient_HandleResponse_ActiveRoomThreadMentionOnlySynthesizesMissedMessages(t *testing.T) {
+	logger := testutil.NewTestLogger(t)
+	ws := testutil.NewMockWsConn()
+	gen := &recordingGenerator{response: "thread response"}
+
+	var fetchMessageCalled bool
+	var threadMessagesCalled bool
+
+	transport := testutil.RoundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case strings.Contains(r.URL.Path, "/api/v1/chat.getMessage"):
+			fetchMessageCalled = true
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{
+					"_id": "thread-root",
+					"msg": "root message",
+					"rid": "room123",
+					"ts":  "2024-01-01T00:00:00Z",
+					"u": map[string]interface{}{
+						"_id":      "user-root",
+						"username": "root",
+						"name":     "Root",
+					},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.getThreadMessages"):
+			threadMessagesCalled = true
+			resp := map[string]interface{}{
+				"messages": []map[string]interface{}{
+					{
+						"_id": "bot-reply-1",
+						"msg": "earlier bot reply",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:05Z",
+						"u": map[string]interface{}{
+							"_id":      "bot-user",
+							"username": "botuser",
+							"name":     "Bot",
+						},
+					},
+					{
+						"_id": "missed-1",
+						"msg": "first missed",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:06Z",
+						"u": map[string]interface{}{
+							"_id":      "user1",
+							"username": "alice",
+							"name":     "Alice",
+						},
+					},
+					{
+						"_id": "current-msg",
+						"msg": "current mention",
+						"rid": "room123",
+						"ts":  "2024-01-01T00:00:07Z",
+						"u": map[string]interface{}{
+							"_id":      "user2",
+							"username": "bob",
+							"name":     "Bob",
+						},
+					},
+				},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.postMessage"):
+			resp := map[string]interface{}{
+				"message": map[string]interface{}{"_id": "reply-msg-id"},
+				"success": true,
+			}
+			body, _ := json.Marshal(resp)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader(body)),
+			}, nil
+		case strings.Contains(r.URL.Path, "/api/v1/chat.update"):
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"success":true}`))),
+			}, nil
+		default:
+			t.Fatalf("unexpected request path: %s", r.URL.Path)
+		}
+		return nil, nil
+	})
+
+	httpClient := &http.Client{Transport: transport}
+	apiClient := NewAPIClient("https://test.com", "bot-user", "token", httpClient, logger)
+
+	client := &Client{
+		api:                 apiClient,
+		generator:           gen,
+		logger:              logger,
+		streamedOutput:      false,
+		pending:             make(map[string]string),
+		ws:                  ws,
+		username:            "botuser",
+		activeRoomThreads:   map[string]activeThreadState{"room123:thread-root": {LastIngestedMessageID: "bot-reply-1"}},
+		activeThreadTrigger: "auto",
+	}
+
+	message := Message{
+		ID:       "current-msg",
+		Text:     "current mention",
+		RoomID:   "room123",
+		ThreadID: "thread-root",
+		User: MessageUser{
+			ID:       "user2",
+			Username: "bob",
+			Name:     "Bob",
+		},
+	}
+
+	client.handleResponse(message, resolvedPolicy{
+		Scope:               "room",
+		RoomID:              "room123",
+		ActiveThreadTrigger: "mention_only",
+	})
+
+	if !fetchMessageCalled || !threadMessagesCalled {
+		t.Fatal("expected thread history to be fetched for mention_only synthesis")
+	}
+	if !strings.Contains(gen.lastMessage.Text, "- alice: first missed") {
+		t.Fatalf("generator message = %q, want missed message context", gen.lastMessage.Text)
+	}
+	if strings.Count(gen.lastMessage.Text, "- bob: current mention") != 2 {
+		t.Fatalf("generator message = %q, want current message in both synthesized sections", gen.lastMessage.Text)
+	}
+
+	state, ok := client.getActiveRoomThreadState("room123", "thread-root")
+	if !ok {
+		t.Fatal("expected active thread state to be preserved")
+	}
+	if state.LastIngestedMessageID != "current-msg" {
+		t.Fatalf("LastIngestedMessageID = %q, want current-msg", state.LastIngestedMessageID)
+	}
+}
+
 func TestClient_HandleDMResponse_Streaming(t *testing.T) {
 	logger := testutil.NewTestLogger(t)
 	ws := testutil.NewMockWsConn()
@@ -2159,6 +2367,7 @@ func TestClient_Start(t *testing.T) {
 		false,
 		"detailed",
 		false,
+		"auto",
 		logger,
 		"online",
 		"",
@@ -2257,6 +2466,7 @@ func TestClient_Start_FetchUsernameError(t *testing.T) {
 		false,
 		"detailed",
 		false,
+		"auto",
 		logger,
 		"",
 		"",
@@ -2305,6 +2515,7 @@ func TestClient_Start_SetStatusError(t *testing.T) {
 		false,
 		"detailed",
 		false,
+		"auto",
 		logger,
 		"",
 		"",
@@ -2361,6 +2572,7 @@ func TestClient_Start_GetSubscriptionsError(t *testing.T) {
 		false,
 		"detailed",
 		false,
+		"auto",
 		logger,
 		"",
 		"",
@@ -2427,6 +2639,7 @@ func TestClient_Start_WebSocketDialError(t *testing.T) {
 		false,
 		"detailed",
 		false,
+		"auto",
 		logger,
 		"",
 		"",
@@ -2521,6 +2734,7 @@ func TestClient_Start_HTTPToWS_URLConversion(t *testing.T) {
 				false,
 				"detailed",
 				false,
+				"auto",
 				logger,
 				"",
 				"",

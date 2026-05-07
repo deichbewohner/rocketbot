@@ -164,6 +164,44 @@ func TestLoad_BooleanFlags(t *testing.T) {
 	}
 }
 
+func TestLoad_ActiveThreadTrigger(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT1_ACTIVE_THREAD_TRIGGER", "mention_only")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	bot, _ := cfg.Get(0)
+	if bot.ActiveThreadTrigger != "mention_only" {
+		t.Fatalf("ActiveThreadTrigger = %q, want mention_only", bot.ActiveThreadTrigger)
+	}
+}
+
+func TestLoad_InvalidActiveThreadTriggerErrors(t *testing.T) {
+	t.Setenv("BOT1_SLUG", "test-bot")
+	t.Setenv("BOT1_URL", "https://chat.example.com")
+	t.Setenv("BOT1_USER_ID", "user123")
+	t.Setenv("BOT1_TOKEN", "token456")
+	t.Setenv("BOT1_WEBHOOK_URL", "https://webhook.example.com/api")
+	t.Setenv("BOT1_PARSER_TYPE", "n8n")
+	t.Setenv("BOT1_ACTIVE_THREAD_TRIGGER", "sometimes")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want active thread trigger validation error")
+	}
+	if !strings.Contains(err.Error(), "BOT1_ACTIVE_THREAD_TRIGGER") {
+		t.Fatalf("Load() error = %v, want active thread trigger validation error", err)
+	}
+}
+
 func TestLoad_URLProcessing(t *testing.T) {
 	t.Setenv("BOT1_SLUG", "test-bot")
 	t.Setenv("BOT1_URL", "https://chat.example.com/")
@@ -249,7 +287,7 @@ func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
 	t.Setenv("BOT1_RENDER_MODE", "concise")
 	t.Setenv(
 		"BOT1_ROOM_POLICIES_JSON",
-		`{"rooms":{"room-123":{"enabled":true,"opencodeSessionDir":"/tmp/room-123","bootstrapPrompt":"Room-specific prompt","renderMode":"detailed","threadDefault":true,"streamedOutput":false}}}`,
+		`{"rooms":{"room-123":{"enabled":true,"opencodeSessionDir":"/tmp/room-123","bootstrapPrompt":"Room-specific prompt","renderMode":"detailed","activeThreadTrigger":"mention_only","threadDefault":true,"streamedOutput":false}}}`,
 	)
 
 	cfg, err := Load()
@@ -279,6 +317,13 @@ func TestLoad_BootstrapPromptAndRoomPolicies(t *testing.T) {
 	}
 	if policy.RenderMode != "detailed" {
 		t.Fatalf("RenderMode = %q, want %q", policy.RenderMode, "detailed")
+	}
+	if policy.ActiveThreadTrigger != "mention_only" {
+		t.Fatalf(
+			"ActiveThreadTrigger = %q, want %q",
+			policy.ActiveThreadTrigger,
+			"mention_only",
+		)
 	}
 	if policy.ThreadDefault == nil || !*policy.ThreadDefault {
 		t.Fatal("expected ThreadDefault override to be true")

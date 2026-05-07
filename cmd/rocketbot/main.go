@@ -84,6 +84,7 @@ func createBot(
 		botCfg.StreamedOutput,
 		botCfg.RenderMode,
 		botCfg.ThreadDefault,
+		botCfg.ActiveThreadTrigger,
 		botLogger,
 		botCfg.StatusMessage,
 		botCfg.BootstrapPrompt,
@@ -100,12 +101,13 @@ func mapRoomPolicies(src map[string]config.RoomPolicyConfig) map[string]bot.Room
 	dst := make(map[string]bot.RoomPolicy, len(src))
 	for roomID, policy := range src {
 		dst[roomID] = bot.RoomPolicy{
-			Enabled:            policy.Enabled,
-			OpenCodeSessionDir: policy.OpenCodeSessionDir,
-			BootstrapPrompt:    policy.BootstrapPrompt,
-			RenderMode:         policy.RenderMode,
-			ThreadDefault:      policy.ThreadDefault,
-			StreamedOutput:     policy.StreamedOutput,
+			Enabled:             policy.Enabled,
+			OpenCodeSessionDir:  policy.OpenCodeSessionDir,
+			BootstrapPrompt:     policy.BootstrapPrompt,
+			RenderMode:          policy.RenderMode,
+			ActiveThreadTrigger: policy.ActiveThreadTrigger,
+			ThreadDefault:       policy.ThreadDefault,
+			StreamedOutput:      policy.StreamedOutput,
 		}
 	}
 	return dst
