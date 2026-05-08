@@ -1113,14 +1113,30 @@ func TestSynthesizeMissedThreadMessagesPrompt(t *testing.T) {
 		{ID: "m2", User: MessageUser{Username: "bob"}, Text: "second"},
 	})
 
-	if !strings.Contains(prompt, "Messages in the thread since your last response:") {
+	if !strings.Contains(prompt, "Thread context since your last response:") {
 		t.Fatalf("prompt = %q, want synthesized header", prompt)
 	}
 	if !strings.Contains(prompt, "- alice: first") || !strings.Contains(prompt, "- bob: second") {
 		t.Fatalf("prompt = %q, want both missed messages", prompt)
 	}
-	if strings.Count(prompt, "- bob: second") != 2 {
-		t.Fatalf("prompt = %q, want latest message included once in each section", prompt)
+	if !strings.Contains(prompt, "Reply to the latest message:\nbob: second") {
+		t.Fatalf("prompt = %q, want explicit latest-message section", prompt)
+	}
+	if strings.Count(prompt, "bob: second") != 2 {
+		t.Fatalf("prompt = %q, want latest message included in context and reply target", prompt)
+	}
+}
+
+func TestSynthesizeMissedThreadMessagesPrompt_SingleMessageDoesNotRepeat(t *testing.T) {
+	prompt := synthesizeMissedThreadMessagesPrompt([]Message{
+		{ID: "m1", User: MessageUser{Username: "alice"}, Text: "only message"},
+	})
+
+	if strings.Contains(prompt, "Reply to the latest message:") {
+		t.Fatalf("prompt = %q, did not expect latest-message section", prompt)
+	}
+	if strings.Count(prompt, "alice: only message") != 1 {
+		t.Fatalf("prompt = %q, want single message listed once", prompt)
 	}
 }
 
@@ -1824,8 +1840,11 @@ func TestClient_HandleResponse_ActiveRoomThreadMentionOnlySynthesizesMissedMessa
 	if !strings.Contains(gen.lastMessage.Text, "- alice: first missed") {
 		t.Fatalf("generator message = %q, want missed message context", gen.lastMessage.Text)
 	}
-	if strings.Count(gen.lastMessage.Text, "- bob: current mention") != 2 {
-		t.Fatalf("generator message = %q, want current message in both synthesized sections", gen.lastMessage.Text)
+	if !gen.lastMessage.PreformattedPrompt {
+		t.Fatal("expected synthesized message to be marked as preformatted prompt")
+	}
+	if strings.Count(gen.lastMessage.Text, "bob: current mention") != 2 {
+		t.Fatalf("generator message = %q, want current message in context and reply target", gen.lastMessage.Text)
 	}
 
 	state, ok := client.getActiveRoomThreadState("room123", "thread-root")

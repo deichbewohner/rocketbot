@@ -1389,6 +1389,10 @@ func buildPrompt(
 		}
 		b.WriteString("\n")
 	}
+	if message.PreformattedPrompt {
+		b.WriteString(strings.TrimSpace(message.Text))
+		return b.String()
+	}
 	if message.User.Username != "" {
 		b.WriteString(message.User.Username)
 		b.WriteString(": ")

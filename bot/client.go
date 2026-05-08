@@ -357,6 +357,7 @@ func (c *Client) prepareMessageForGenerator(
 
 	synthesized := message
 	synthesized.Text = synthesizeMissedThreadMessagesPrompt(missed)
+	synthesized.PreformattedPrompt = true
 	return synthesized
 }
 
@@ -391,7 +392,7 @@ func collectMissedThreadMessages(
 
 func synthesizeMissedThreadMessagesPrompt(messages []Message) string {
 	var b strings.Builder
-	b.WriteString("Messages in the thread since your last response:\n\n")
+	b.WriteString("Thread context since your last response:\n\n")
 	for _, msg := range messages {
 		username := strings.TrimSpace(msg.User.Username)
 		if username == "" {
@@ -403,16 +404,17 @@ func synthesizeMissedThreadMessagesPrompt(messages []Message) string {
 		b.WriteString(strings.TrimSpace(msg.Text))
 		b.WriteString("\n")
 	}
-	last := messages[len(messages)-1]
-	username := strings.TrimSpace(last.User.Username)
-	if username == "" {
-		username = "user"
+	if len(messages) > 1 {
+		last := messages[len(messages)-1]
+		username := strings.TrimSpace(last.User.Username)
+		if username == "" {
+			username = "user"
+		}
+		b.WriteString("\nReply to the latest message:\n")
+		b.WriteString(username)
+		b.WriteString(": ")
+		b.WriteString(strings.TrimSpace(last.Text))
 	}
-	b.WriteString("\nLatest message requiring a reply:\n")
-	b.WriteString("- ")
-	b.WriteString(username)
-	b.WriteString(": ")
-	b.WriteString(strings.TrimSpace(last.Text))
 	return b.String()
 }
 

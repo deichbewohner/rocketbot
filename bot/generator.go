@@ -51,6 +51,10 @@ type Message struct {
 	Text      string
 	RoomID    string
 	ThreadID  string // tmid - thread message ID (empty if not in a thread)
+	// PreformattedPrompt marks Text as already-constructed prompt content that
+	// should be sent as-is to the generator instead of being wrapped as
+	// "<username>: <text>".
+	PreformattedPrompt bool
 	Timestamp time.Time
 	User      MessageUser
 }

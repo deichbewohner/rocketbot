@@ -158,6 +158,22 @@ func TestBuildPrompt_IncludesBootstrapPromptOnlyOnBootstrap(t *testing.T) {
 	}
 }
 
+func TestBuildPrompt_PreformattedPromptSkipsUsernameWrapper(t *testing.T) {
+	message := Message{
+		Text:               "Thread context since your last response:\n\n- christian: hello",
+		User:               MessageUser{Username: "christian"},
+		PreformattedPrompt: true,
+	}
+
+	prompt := buildPrompt(context.Background(), message, nil, false)
+	if prompt != message.Text {
+		t.Fatalf("prompt = %q, want %q", prompt, message.Text)
+	}
+	if strings.HasPrefix(prompt, "christian: ") {
+		t.Fatalf("prompt = %q, did not expect username wrapper", prompt)
+	}
+}
+
 func TestOpenCodeGenerator_HistoryLimit_TracksSessionBootstrap(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
 	g := NewOpenCodeGenerator("http://127.0.0.1:4096", "", "deny", "", nil, logger)
